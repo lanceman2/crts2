@@ -1,0 +1,32 @@
+#!/bin/bash
+
+# This script sets up the software for a typical development
+# configuration.  You are not necessarily encouraged to use this, but
+# copying it and making your own local version of it is encouraged.
+
+set -e
+
+# Get in this directory.
+dir="$(dirname ${BASH_SOURCE[0]})"
+[ -n "$dir" ] || exit 1
+cd "$dir"
+
+
+[ ! -f quickbuild.make ] && ./bootstrap
+
+cat > config.make << EOF
+# This is a generated file
+
+CFLAGS := -g -Wall -Werror
+
+CXXFLAGS := \$(CFLAGS)
+
+PREFIX := /usr/local/encap/crts
+EOF
+
+echo
+echo "############# config.make #############"
+echo
+
+cat config.make
+echo

@@ -1,0 +1,52 @@
+#!/bin/bash
+
+
+COUNTFILE=/tmp/$(whoami)_Ycounter_termRun
+
+function restartCounter()
+{
+    echo "24" > $COUNTFILE # in pixels
+}
+
+function reset()
+{
+    # Remove all tmp history files and counter files
+    # if there are any
+    rm -f /tmp/*_termRun
+
+    restartCounter
+    echo "reset the terminal y offset counter"
+    exit
+}
+
+
+[ -z "$*" ] && reset
+[ ! -e $COUNTFILE ] && restartCounter
+
+
+y_offset=388
+
+y=$(cat $COUNTFILE) # in pixels
+geo="--geometry 98x18+19+$y"
+
+let y=${y}+$y_offset
+
+echo "$y" > $COUNTFILE
+
+title="$*"
+
+term="mate-terminal --hide-menubar $geo"
+
+
+HISTFILE=$(mktemp --suffix=_termRun)
+
+echo "$*" > $HISTFILE
+
+set -x
+#
+# Figuring out how to escape this command string was very painful:
+#
+$term -t "$title" -x bash -c "$* ; HISTFILE=$HISTFILE bash -i ; rm -f $HISTFILE"
+
+#while true ; do sleep 1 ; done
+
