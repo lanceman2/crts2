@@ -6,7 +6,7 @@
 
 set -e
 
-# Get in this directory.
+# Get in this directory where this file is:
 dir="$(dirname ${BASH_SOURCE[0]})"
 [ -n "$dir" ] || exit 1
 cd "$dir"

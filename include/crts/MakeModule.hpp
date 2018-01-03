@@ -11,6 +11,39 @@
 // derived_class_name is the derived class name which must publicly
 // inherit the base class named base_class_name.  Call this macro outside
 // all code blocks without a tailing semi-colon.
+
+/* For Example:
+ *
+ * MyMod.cpp
+
+// crts/BaseMod.hpp should include crts/MakeModule.hpp:
+//#include <crts/MakeModule.hpp>
+
+#inlcude <crts/BaseMod.hpp>
+
+
+class MyModule : public BaseMod
+{
+    public:
+
+        MyModule(int argc, const char **argv);
+
+        void execute(void);
+};
+
+MyModule::MyModule(int argc, const char **argv)
+{
+    // Parse argv.
+}
+
+void MyModule::execute(void)
+{ 
+    // Do stuff.
+}
+
+CRTS_MAKE_MODULE(BaseMod, MyModule)
+
+ */
 #define CRTS_MAKE_MODULE(base_class_name, derived_class_name) \
     static base_class_name *createObj(int argc, const char **argv)\
     {\

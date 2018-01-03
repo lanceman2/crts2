@@ -1,3 +1,5 @@
+# Define package specific GNU make variables in here.
+
 
 # TODO: We need to better decide what goes here.  This
 # is okay so long as we have no releases.

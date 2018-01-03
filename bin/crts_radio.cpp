@@ -1,21 +1,85 @@
+#ifndef _GNU_SOURCE
+#  define _GNU_SOURCE
+#endif
+#include <dlfcn.h>
+#include <unistd.h>
+#include <sys/types.h>
+#include <stdlib.h>
+#include <string.h>
 #include <stdio.h>
 #include <signal.h>
 #include <pthread.h>
 #include <inttypes.h>
+#include <list>
 #include <string>
 #include <atomic>
-#include <stdlib.h>
-#include <sys/types.h>
 #include <uhd/usrp/multi_usrp.hpp>
 
 #include "debug.h"
 
 #include "get_opt.hpp"
-#include "ModuleLoader.hpp"
-#include "module_util.hpp"
+#include "LoadModule.hpp"
+#include "crts/RadioIO.hpp"
 //#include "usrp_set_parameters.hpp" // UHD usrp wrappers
 #include "pthread_wrappers.h" // some pthread_*() wrappers
 
+class IOModule;
+
+// A singleton factory of IOModule class objects.
+class IOModules : public std::list<IOModule*>
+{
+    public:
+
+        ~IOModules();
+        
+};
+
+
+IOModules::~IOModules()
+{
+    DSPEW();
+}
+
+
+static IOModules ioModules;
+
+
+
+// A class for keeping the CRTSRadioIO loaded modules.
+class IOModule
+{
+    public:
+
+        IOModule(const char *name, int argc, const char **argv);
+        ~IOModule(void);
+
+
+    private:
+
+        CRTSRadioIO *io;
+
+        CRTSRadioIO *reader, *writer;
+
+        void *(*destroyIO)(CRTSRadioIO *);
+};
+
+
+IOModule::IOModule(const char *name, int argc, const char **argv) :
+    io(0), reader(0), writer(0), destroyIO(0)
+{
+    io = LoadModule<CRTSRadioIO>(name, "RadioIO", argc, argv, destroyIO);
+    if(!io || !destroyIO)
+        throw("fail");
+
+    ioModules.push_back(this);
+}
+
+
+IOModule::~IOModule(void)
+{
+    if(destroyIO && io)
+        destroyIO(io);
+}
 
 
 // Shared in threadShared.hpp
@@ -32,18 +96,19 @@ pthread_mutex_t fftw3_mutex = PTHREAD_MUTEX_INITIALIZER;
 //
 //   SIGINT is from Ctrl-C in a terminal.
 //
-static const int exitSignals[] = { SIGINT, 0 };
+static const int exitSignals[] = { SIGINT, 0/*0 terminator*/ };
 
 
 static pthread_t _mainThread = pthread_self();
 
 
-// This is a module user interface
+// This is a module user interface that may be called from another thread.
 //
 // Try to gracefully exit.
 void crtsExit(void)
 {
     errno = 0;
+    // We signal using just the first exit signal in the list.
     INFO("Sending signal %d to main thread", exitSignals[0]);
     errno = pthread_kill(_mainThread, exitSignals[0]);
     // All we could do is try and report.
@@ -124,17 +189,53 @@ int main(int argc, const char **argv)
     }
 
 
+    {
+
+        // Default list of modules.  0 terminated.
+        const char *modules[] =
+        { 
+            "rx", "liquid-sync", "stdout",
+            "stdin", "liquid-frame" "tx",
+            0
+        };
+
+        // Default module connectivity: connect 0 -> 1, 1 -> 2,
+        // and 3 -> 4, 4 -> 5.
+        //
+        // Connections are pairs of module array indexes that is
+        // -1 terminated
+        uint32_t connect[] =
+        {
+            0, 1, 1, 2,
+            3, 4, 4, 5,
+            (uint32_t) -1/*terminator*/
+        };
+
+        // TODO: parse command line to change modules list, module arguments and
+        // module connectivity.
+
+        // TODO: Add checking of module connectivity, so that they make sense.
+
+
+        // Load modules:
+        WARN("%s", modules[0]);
+        connect[0]++;
+
+    }
+
+
     // RANT:
     //
     // It'd be real nice if the UHD API would document what is thread-safe
     // and what is not for all the API.  We can only guess how to use this
-    // stupid UHD API by looking at example codes.  The structure of the
-    // UHD API implies that you should be able to use a single
-    // uhd::usrp::multi_usrp::sptr to do both transmission and receiving
-    // but none of the example do that, the examples imply that you must
-    // make two uhd::usrp::multi_usrp::sptr objects one for (TX)
-    // transmission and one for (RX) receiving.  
-    
+    // stupid UHD API by looking at example codes.
+    //
+    // The structure of the UHD API implies that you should be able to use
+    // a single uhd::usrp::multi_usrp::sptr to do both transmission and
+    // receiving but none of the example do that, the examples imply that
+    // you must make two uhd::usrp::multi_usrp::sptr objects one for
+    // (TX) transmission and one for (RX) receiving.
+
     // register UHD message handler
     // Let it use stdout, or stderr by default???
     //uhd::msg::register_handler(&uhd_msg_handler);
