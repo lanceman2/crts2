@@ -10,7 +10,7 @@
 #include <signal.h>
 #include <pthread.h>
 #include <inttypes.h>
-#include <list>
+#include <map>
 #include <string>
 #include <atomic>
 #include <uhd/usrp/multi_usrp.hpp>
@@ -19,67 +19,140 @@
 
 #include "get_opt.hpp"
 #include "LoadModule.hpp"
-#include "crts/RadioIO.hpp"
+#include "crts/Stream.hpp"
 //#include "usrp_set_parameters.hpp" // UHD usrp wrappers
 #include "pthread_wrappers.h" // some pthread_*() wrappers
 
-class IOModule;
+class StreamModule;
 
-// A singleton factory of IOModule class objects.
-class IOModules : public std::list<IOModule*>
+// A singleton factory of StreamModule class objects.
+//
+// Keeps a list (map) of StreamModules.
+class StreamModules : private std::map<uint32_t, StreamModule*>
 {
     public:
 
-        ~IOModules();
-        
+        StreamModules(void);
+        ~StreamModules(void);
+        bool load(const char *name, int argc, const char **argv);
+
+        bool connect(uint32_t from, uint32_t to);
+
+    private:
+
+        // Never decreases.
+        uint32_t loadCount;
 };
 
-
-IOModules::~IOModules()
+StreamModules::StreamModules(): loadCount(0)
 {
     DSPEW();
 }
 
 
-static IOModules ioModules;
+StreamModules::~StreamModules()
+{
+    DSPEW();
+}
 
-
-
-// A class for keeping the CRTSRadioIO loaded modules.
-class IOModule
+// A class for keeping the CRTSStream loaded modules with other data.
+// Basically a stupid container struct, because we wanted to decrease the
+// amount of data in the CRTSStream (private or otherwise) which will tend
+// to make the user interface change less.  We can add more stuff to this
+// and the user interface will not change at all.  Even adding private
+// data to the user interface in the class CRTSStream will change the API
+// (application programming interface) and more importantly ABI
+// (application binary interface), so this cuts down on interface changes.
+//
+// And that's a big deal.
+class StreamModule
 {
     public:
 
-        IOModule(const char *name, int argc, const char **argv);
-        ~IOModule(void);
+        CRTSStream *stream;
 
+        void *(*destroyStream)(CRTSStream *);
 
-    private:
+        int loadIndex; // From StreamModules::loadCount
 
-        CRTSRadioIO *io;
+        inline void setReader(CRTSStream *s)
+        {
+            stream->reader = s;
+        }
 
-        CRTSRadioIO *reader, *writer;
-
-        void *(*destroyIO)(CRTSRadioIO *);
+        inline void setWriter(CRTSStream *s)
+        {
+            stream->writer = s;
+        }
 };
 
 
-IOModule::IOModule(const char *name, int argc, const char **argv) :
-    io(0), reader(0), writer(0), destroyIO(0)
+// Return false on success.
+bool StreamModules::load(const char *name, int argc, const char **argv)
 {
-    io = LoadModule<CRTSRadioIO>(name, "RadioIO", argc, argv, destroyIO);
-    if(!io || !destroyIO)
-        throw("fail");
+    StreamModule *sm = new StreamModule;
+    
+    sm->stream = LoadModule<CRTSStream>(name, "Stream",
+            argc, argv, sm->destroyStream);
 
-    ioModules.push_back(this);
+    if(!sm->stream || !sm->destroyStream)
+        goto fail;
+
+    this->insert(std::pair<uint32_t, StreamModule*>(++loadCount, sm));
+    sm->loadIndex = loadCount;
+    
+    return false; // success
+
+fail:
+
+    delete sm;
+    return true; // failure
 }
 
-
-IOModule::~IOModule(void)
+// Return false on success.
+bool StreamModules::connect(uint32_t from, uint32_t to)
 {
-    if(destroyIO && io)
-        destroyIO(io);
+    if(from == to)
+    {
+        ERROR("The stream numbered %" PRIu32
+                " cannot be connected to its self");
+        return true; // failure
+    }
+
+    std::map<uint32_t,StreamModule*>::iterator it;
+
+    it = this->find(from);
+    if(it == this->end())
+    {
+        ERROR("There is no stream numbered %" PRIu32, from);
+        return true; // failure
+    }
+    StreamModule *f = it->second;
+
+    it = this->find(to);
+    if(it == this->end())
+    {
+        ERROR("There is no stream numbered %" PRIu32, to);
+        return true; // failure
+    }
+    StreamModule *t = it->second;
+
+
+    // connect these two streams in this direction:
+    f->setReader(t->stream); // t is the reader
+    t->setWriter(f->stream); // f is the writer
+
+    return false; // success
 }
+
+static StreamModules streamModules;
+
+
+
+// TODO: bool StreamModules::unload()
+
+
+
 
 
 // Shared in threadShared.hpp
@@ -190,37 +263,40 @@ int main(int argc, const char **argv)
 
 
     {
-
         // Default list of modules.  0 terminated.
+        // By default this runs like the UNIX program "cat"
         const char *modules[] =
         { 
-            "rx", "liquid-sync", "stdout",
-            "stdin", "liquid-frame" "tx",
+            "stdin", "passThrough", "stdout",
             0
         };
 
-        // Default module connectivity: connect 0 -> 1, 1 -> 2,
-        // and 3 -> 4, 4 -> 5.
+        // Default module connectivity: connect 0 -> 1, 1 -> 2
         //
         // Connections are pairs of module array indexes that is
         // -1 terminated
-        uint32_t connect[] =
+        uint32_t connections[] =
         {
-            0, 1, 1, 2,
-            3, 4, 4, 5,
+            0, 1, 1, 2, // a flow.  A single stream
+            // 0 being a source and 1 being a sink
             (uint32_t) -1/*terminator*/
         };
+
+        for(const char **mod = modules; mod; mod++)
+            if(streamModules.load(*mod, argc-1, &argv[1]))
+                return 1; // fail
+
+        for(uint32_t *i = connections;
+                *i != (uint32_t) -1 && *(i+1) != (uint32_t) -1 ;
+                ++i)
+            if(streamModules.connect(*i, *(i+1)))
+                return 1;
+
 
         // TODO: parse command line to change modules list, module arguments and
         // module connectivity.
 
         // TODO: Add checking of module connectivity, so that they make sense.
-
-
-        // Load modules:
-        WARN("%s", modules[0]);
-        connect[0]++;
-
     }
 
 
