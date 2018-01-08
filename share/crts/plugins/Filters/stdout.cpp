@@ -19,7 +19,11 @@ Stdout::Stdout(int argc, const char **argv) {DSPEW();}
 
 ssize_t Stdout::write(void *buffer, size_t bufferLen)
 {
-   return (ssize_t) fwrite(buffer, 1, bufferLen, crtsOut);
+    ssize_t ret = fwrite(buffer, 1, bufferLen, crtsOut);
+
+    releaseBuffer(buffer);
+
+    return ret;
 }
 
 
