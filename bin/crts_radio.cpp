@@ -154,6 +154,9 @@ bool FilterModules::connect(uint32_t from, uint32_t to)
     FilterModule *t = it->second;
 
 
+    // TODO: we need to fix this to get a mapping to the correct
+    // filters when stream can fork merge at a filter.
+
     // connect these two filters in this direction:
     f->readers.push_back(t->filter); // t is the reader
     t->writers.push_back(f->filter); // f is the writer
