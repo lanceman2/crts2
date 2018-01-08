@@ -12,16 +12,20 @@ class Stdout : public CRTSFilter
 
         Stdout(int argc, const char **argv);
 
-        ssize_t write(void *buffer, size_t bufferLen);
+        ssize_t write(void *buffer, size_t bufferLen,
+                uint32_t channelNum);
 };
 
 Stdout::Stdout(int argc, const char **argv) {DSPEW();}
 
-ssize_t Stdout::write(void *buffer, size_t bufferLen)
+ssize_t Stdout::write(void *buffer, size_t len, uint32_t channelNum)
 {
-    ssize_t ret = fwrite(buffer, 1, bufferLen, crtsOut);
+    ssize_t ret = fwrite(buffer, 1, len, crtsOut);
 
-    releaseBuffer(buffer);
+    // This filter is a sink, the end of the line, so we do not need to
+    // writePush().
+
+    releaseBuffer(buffer, ret);
 
     return ret;
 }

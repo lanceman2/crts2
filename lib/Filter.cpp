@@ -17,31 +17,25 @@ const uint32_t CRTSFilter::defaultBufferQueueLength = 3;
 CRTSFilter::~CRTSFilter(void) { DSPEW(); }
 
 
-CRTSFilter::CRTSFilter(void): reader(0), writer(0),
-        bufferQueueLength(CRTSFilter::defaultBufferQueueLength)
+CRTSFilter::CRTSFilter(void):
+    bufferQueueLength(CRTSFilter::defaultBufferQueueLength)
 {
     DSPEW();
 }
 
 
-void CRTSFilter::setThreaded(void)
+void CRTSFilter::writePush(void *buffer, size_t bufferLen, uint32_t channelNum)
 {
 
 }
 
-void CRTSFilter::writePush(void *buffer, size_t bufferLen)
-{
-    if(!reader) return; // this is a stream sink
-
-    reader->write(buffer, bufferLen);
-}
 
 void *CRTSFilter::getBuffer(size_t bufferLen)
 {
     return 0;
 }
 
-void CRTSFilter::releaseBuffer(void *buffer)
+void CRTSFilter::releaseBuffer(void *buffer, ssize_t nWritten)
 {
 
 }

@@ -3,6 +3,7 @@
 
 #include <inttypes.h>
 #include <pthread.h>
+#include <list>
 
 #include <crts/MakeModule.hpp>
 
@@ -76,9 +77,10 @@ class FilterModule;
 //
 //
 // A common filter stream processing interface to seamlessly provide
-// runtime optimization of threading and process topology selection.
-//
-// Kind of like run time optimization of MPI HPC jobs.
+// runtime optimization of threading and process topology selection.  Kind
+// of like in optimization of MPI (massage passing interface) HPC (high
+// performance computing) applications, we have node/thread runtime
+// partitioning.
 //
 class CRTSFilter
 {
@@ -102,7 +104,19 @@ class CRTSFilter
         // In a sense this write() executes the stream.
         //
         // Clearly the writer (caller of this) dictates the buffer size.
-        virtual ssize_t write(void *buffer, size_t bufferLen) = 0;
+        //
+        // channelNum is set to non-zero values in order to merge filter
+        // streams.  Most CRTSFilters will not care about channelNum.
+        //
+        // 0 <= channelNum < N   It's up to the CRTSFilter to decide what
+        // to do with channelNum.  A CRTSFilter code that looks at
+        // channelNum may be a stream merging filter, or a general stream
+        // switching filter.
+        virtual
+        ssize_t write(
+                void *buffer,
+                size_t bufferLen,
+                uint32_t channelNum=0) = 0;
 
         virtual ~CRTSFilter(void);
 
@@ -112,7 +126,37 @@ class CRTSFilter
 
         // User interface to write to the next module in the stream.
 
-        void writePush(void *buffer, size_t bufferLen);
+        // The CRTSFilter code know if they are pushing to more than on
+        // channel.  The channel we refer to here is just an attribute of
+        // this filter point (node) in this stream.  ChannelNum goes from
+        // 0 to N-1 where N is the total CRTSFilters that are connected
+        // to push this data to.  It's up to the writer of the CRTSFilter
+        // to define how to push to each channel, and what channel M (0 <=
+        // M < N) means.  Do not confuse this with other channel
+        // abstractions like a frequency sub band or other software
+        // signal channel.  Use channelNum=0 unless this CRTSFilter is
+        // splitting the stream.
+        //
+        // TODO: Named channels and other channel mappings that are not
+        // just a simple array index thing.
+        //
+        // TODO: Varying number of channels on the fly.  This may just
+        // work already.
+        //
+        // If a channel is not "connected" this does nothing or fails.
+        //
+        // writePush() may be called many times in a given write() call.
+        // writePush() manages its self keeping track of how many channels
+        // there are just from the calls to writePush(), there is no need
+        // to create channels explicitly, but we can manage channels
+        // explicitly too.
+        //
+        // channelNum handles the splitting of the stream.  We can call
+        // writePush() many times to write the same thing to many
+        // channels; with the cost only being an added call on the
+        // function stack.
+        void writePush(void *buffer, size_t len, uint32_t channelNum = 0);
+
 
         // Returns a locked buffer if this module has a reader that
         // is in a different thread.  This will recycle buffers.
@@ -124,51 +168,22 @@ class CRTSFilter
         // than the module that wrote to this module.  The module may
         // hold more than one lock, so that adjacent buffers may be
         // compared without memory copies.
-        void releaseBuffer(void *buffer);
+        void releaseBuffer(void *buffer, ssize_t nWritten);
 
         // Think how many total packages can we handle on the conveyor
         // belts, held at the packagers (writers), and held at the
         // receivers (readers).  This is the buffer queue that is between
         // all the modules that access (read or write) this buffer
         // queue.
+        //
+        // Think: What is the maximum number of packages that will fit on
+        // the conveyor belt.
         void setBufferQueueLength(uint32_t n);
-
-
-        static const uint32_t defaultBufferQueueLength;
 
 
     private:
 
-        // If reader is null (0) this is a stream sink.
-        CRTSFilter *reader;
-
-        void setThreaded(void);
-
-        pthread_t thread; // if there is a thread
-
-
-        // Filter modules connections are made with Input writer
-        // and Output reader.
-        //
-        // reader reads what this module produces triggered by
-        // writer writes to this module.
-        //
-        // TODO: have multiple readers and writers or forks in the stream
-        // flow.
-        //
-        //
-        //     SINK, SOURCE, and INTERMEDIATE filters:
-        //
-        // If there is no reader than this is a output stream filter
-        // (flow) terminator or SINK.  If there is no writer than this is
-        // a in stream filter (flow) terminator or SOURCE.  If there is a
-        // reader and a writer than this is a continuous flow, pass
-        // through, flow restriction, general stream, or in general a
-        // software INTERMEDIATE stream filter.
-        //
-        // If writer is null (0) than this is a source.
-        //
-        CRTSFilter *writer;
+        static const uint32_t defaultBufferQueueLength;
 
         // Buffer length needed/requested by this module.
         uint32_t bufferQueueLength;
@@ -177,7 +192,7 @@ class CRTSFilter
     // The FilterModule has to manage the CRTSFilter adding readers and
     // writers from between separate CRTSFilter objects.  May be better
     // than exposing methods that should not be used by CRTSFilter
-    // implementers.  Because the user never knows what a FilterModule is
+    // implementers, because the user never knows what a FilterModule is
     // the API and ABI never changes when FilterModule changes, whereby
     // making this interface more stable.
     friend FilterModule;

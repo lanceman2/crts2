@@ -76,15 +76,30 @@ class FilterModule
 
         int loadIndex; // From FilterModules::loadCount
 
-        inline void setReader(CRTSFilter *s)
-        {
-            filter->reader = s;
-        }
+        // Filter modules connections are made with Input writer
+        // and Output reader.
+        //
+        // reader reads what this module produces triggered by
+        // writer writes to this module.
+        //
+        // TODO: have multiple readers and writers giving forks and merges 
+        // in the stream flow.
+        //
+        //
+        //     SINK, SOURCE, and INTERMEDIATE filters:
+        //
+        // If there is no reader than this is a output stream filter
+        // (flow) terminator or SINK.  If there is no writer than this is
+        // a in stream filter (flow) terminator or SOURCE.  If there is a
+        // reader and a writer than this is a continuous flow, pass
+        // through, flow restriction, general stream, or in general a
+        // software INTERMEDIATE stream filter.
+        //
+        // We hide the private data and functions in class FilterModule
+        // so as to not pollute these interface header file.
 
-        inline void setWriter(CRTSFilter *s)
-        {
-            filter->writer = s;
-        }
+        std::list<CRTSFilter*>readers;
+        std::list<CRTSFilter*>writers;
 };
 
 
@@ -92,7 +107,7 @@ class FilterModule
 bool FilterModules::load(const char *name, int argc, const char **argv)
 {
     FilterModule *sm = new FilterModule;
-    
+
     sm->filter = LoadModule<CRTSFilter>(name, "Filter",
             argc, argv, sm->destroyFilter);
 
@@ -139,9 +154,9 @@ bool FilterModules::connect(uint32_t from, uint32_t to)
     FilterModule *t = it->second;
 
 
-    // connect these two filter in this direction:
-    f->setReader(t->filter); // t is the reader
-    t->setWriter(f->filter); // f is the writer
+    // connect these two filters in this direction:
+    f->readers.push_back(t->filter); // t is the reader
+    t->writers.push_back(f->filter); // f is the writer
 
     return false; // success
 }
@@ -274,12 +289,16 @@ int main(int argc, const char **argv)
 
         // Default module flow connectivity: connect 0 -> 1, 1 -> 2, 2 -> 3
         //
+        // Splitting a stream at a given filter is done 
+        //
         // Connections are pairs of module array indexes that is
         // -1 terminated
         uint32_t connections[] =
         {
-            0, 1, 1, 2, 3, 4, // a flow.  A single filter
+            0, 1, 1, 2, // a single flow with no forks (splits or merges)
             // 0 being a source and 1 being a sink
+            // 0 -> 1, 0 -> 2, is a split in the stream
+            // 1 -> 3, 2 -> 3, is a merge in the stream
             (uint32_t) -1/*terminator*/
         };
 
