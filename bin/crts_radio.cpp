@@ -19,21 +19,22 @@
 
 #include "get_opt.hpp"
 #include "LoadModule.hpp"
-#include "crts/Stream.hpp"
-//#include "usrp_set_parameters.hpp" // UHD usrp wrappers
+// Read comments in ../include/crts/Filter.hpp.
+#include "crts/Filter.hpp"
 #include "pthread_wrappers.h" // some pthread_*() wrappers
 
-class StreamModule;
+class FilterModule;
 
-// A singleton factory of StreamModule class objects.
+// A singleton factory of FilterModule class objects.
 //
-// Keeps a list (map) of StreamModules.
-class StreamModules : private std::map<uint32_t, StreamModule*>
+// Keeps a list (map) of FilterModules.
+class FilterModules : private std::map<uint32_t, FilterModule*>
 {
     public:
 
-        StreamModules(void);
-        ~StreamModules(void);
+        FilterModules(void);
+        ~FilterModules(void);
+
         bool load(const char *name, int argc, const char **argv);
 
         bool connect(uint32_t from, uint32_t to);
@@ -44,61 +45,61 @@ class StreamModules : private std::map<uint32_t, StreamModule*>
         uint32_t loadCount;
 };
 
-StreamModules::StreamModules(): loadCount(0)
+FilterModules::FilterModules(): loadCount(0)
 {
     DSPEW();
 }
 
 
-StreamModules::~StreamModules()
+FilterModules::~FilterModules()
 {
     DSPEW();
 }
 
-// A class for keeping the CRTSStream loaded modules with other data.
+// A class for keeping the CRTSFilter loaded modules with other data.
 // Basically a stupid container struct, because we wanted to decrease the
-// amount of data in the CRTSStream (private or otherwise) which will tend
+// amount of data in the CRTSFilter (private or otherwise) which will tend
 // to make the user interface change less.  We can add more stuff to this
 // and the user interface will not change at all.  Even adding private
-// data to the user interface in the class CRTSStream will change the API
+// data to the user interface in the class CRTSFilter will change the API
 // (application programming interface) and more importantly ABI
 // (application binary interface), so this cuts down on interface changes.
 //
 // And that's a big deal.
-class StreamModule
+class FilterModule
 {
     public:
 
-        CRTSStream *stream;
+        CRTSFilter *filter;
 
-        void *(*destroyStream)(CRTSStream *);
+        void *(*destroyFilter)(CRTSFilter *);
 
-        int loadIndex; // From StreamModules::loadCount
+        int loadIndex; // From FilterModules::loadCount
 
-        inline void setReader(CRTSStream *s)
+        inline void setReader(CRTSFilter *s)
         {
-            stream->reader = s;
+            filter->reader = s;
         }
 
-        inline void setWriter(CRTSStream *s)
+        inline void setWriter(CRTSFilter *s)
         {
-            stream->writer = s;
+            filter->writer = s;
         }
 };
 
 
 // Return false on success.
-bool StreamModules::load(const char *name, int argc, const char **argv)
+bool FilterModules::load(const char *name, int argc, const char **argv)
 {
-    StreamModule *sm = new StreamModule;
+    FilterModule *sm = new FilterModule;
     
-    sm->stream = LoadModule<CRTSStream>(name, "Stream",
-            argc, argv, sm->destroyStream);
+    sm->filter = LoadModule<CRTSFilter>(name, "Filter",
+            argc, argv, sm->destroyFilter);
 
-    if(!sm->stream || !sm->destroyStream)
+    if(!sm->filter || !sm->destroyFilter)
         goto fail;
 
-    this->insert(std::pair<uint32_t, StreamModule*>(++loadCount, sm));
+    this->insert(std::pair<uint32_t, FilterModule*>(++loadCount, sm));
     sm->loadIndex = loadCount;
     
     return false; // success
@@ -110,46 +111,46 @@ fail:
 }
 
 // Return false on success.
-bool StreamModules::connect(uint32_t from, uint32_t to)
+bool FilterModules::connect(uint32_t from, uint32_t to)
 {
     if(from == to)
     {
-        ERROR("The stream numbered %" PRIu32
+        ERROR("The filter numbered %" PRIu32
                 " cannot be connected to its self");
         return true; // failure
     }
 
-    std::map<uint32_t,StreamModule*>::iterator it;
+    std::map<uint32_t,FilterModule*>::iterator it;
 
     it = this->find(from);
     if(it == this->end())
     {
-        ERROR("There is no stream numbered %" PRIu32, from);
+        ERROR("There is no filter numbered %" PRIu32, from);
         return true; // failure
     }
-    StreamModule *f = it->second;
+    FilterModule *f = it->second;
 
     it = this->find(to);
     if(it == this->end())
     {
-        ERROR("There is no stream numbered %" PRIu32, to);
+        ERROR("There is no filter numbered %" PRIu32, to);
         return true; // failure
     }
-    StreamModule *t = it->second;
+    FilterModule *t = it->second;
 
 
-    // connect these two streams in this direction:
-    f->setReader(t->stream); // t is the reader
-    t->setWriter(f->stream); // f is the writer
+    // connect these two filter in this direction:
+    f->setReader(t->filter); // t is the reader
+    t->setWriter(f->filter); // f is the writer
 
     return false; // success
 }
 
-static StreamModules streamModules;
+static FilterModules filterModules;
 
 
 
-// TODO: bool StreamModules::unload()
+// TODO: bool FilterModules::unload()
 
 
 
@@ -271,25 +272,25 @@ int main(int argc, const char **argv)
             0
         };
 
-        // Default module connectivity: connect 0 -> 1, 1 -> 2
+        // Default module flow connectivity: connect 0 -> 1, 1 -> 2, 2 -> 3
         //
         // Connections are pairs of module array indexes that is
         // -1 terminated
         uint32_t connections[] =
         {
-            0, 1, 1, 2, // a flow.  A single stream
+            0, 1, 1, 2, 3, 4, // a flow.  A single filter
             // 0 being a source and 1 being a sink
             (uint32_t) -1/*terminator*/
         };
 
         for(const char **mod = modules; mod; mod++)
-            if(streamModules.load(*mod, argc-1, &argv[1]))
+            if(filterModules.load(*mod, argc-1, &argv[1]))
                 return 1; // fail
 
         for(uint32_t *i = connections;
                 *i != (uint32_t) -1 && *(i+1) != (uint32_t) -1 ;
                 ++i)
-            if(streamModules.connect(*i, *(i+1)))
+            if(filterModules.connect(*i, *(i+1)))
                 return 1;
 
 

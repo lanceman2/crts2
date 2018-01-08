@@ -5,7 +5,7 @@ INSTALL_DIR = $(PREFIX)/crts/include
 
 INSTALLED :=\
  MakeModule.hpp\
- RadioIO.hpp
+ Filter.hpp
 
 
 include ../../quickbuild.make

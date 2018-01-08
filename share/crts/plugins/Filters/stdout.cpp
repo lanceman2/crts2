@@ -1,12 +1,12 @@
 #include <stdio.h>
 
-#include "crts/Stream.hpp"
+#include "crts/Filter.hpp"
 #include "crts.h" // for:  FILE *crtsOut
 
 //#define DSPEW() /*empty macro*/
 #define DSPEW() fprintf(stderr, "%s:%d:%s()\n", __FILE__, __LINE__, __func__)
 
-class Stdout : public CRTSStream
+class Stdout : public CRTSFilter
 {
     public:
 
@@ -24,4 +24,4 @@ ssize_t Stdout::write(void *buffer, size_t bufferLen)
 
 
 // Define the module loader stuff to make one of these class objects.
-CRTSSTREAM_MAKE_MODULE(Stdout)
+CRTSFILTER_MAKE_MODULE(Stdout)
