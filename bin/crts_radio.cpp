@@ -127,7 +127,7 @@ bool FilterModules::connect(uint32_t from, uint32_t to)
     // like a doubly linked list from one filter to another.
     ////////////////////////////////////////////////////////////
 
-    // Currently using arrays to construct a doubly linked list
+    // TODO: Currently using arrays to construct a doubly linked list
     // which will allow very fast access, but slow editing.
 
     // In the "f" filter we need to writePush() to readers telling the "t"
