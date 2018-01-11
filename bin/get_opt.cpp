@@ -1,7 +1,7 @@
 #include <string.h>
 #include <string>
 
-#include "debug.h"
+#include "crts/debug.h"
 #include "get_opt.hpp"
 
 // Look for a command-line option with short and long option flags

@@ -13,9 +13,10 @@
 // CRTSFilter is the particular users filter implementation that has a
 // standard CRTSFilter interface.  FilterModule just adds more genetic
 // code to the CRTSFilter making it a software plugin filter module which
-// you string together to build a CRTS "Stream".
+// you string together to build a CRTS filter "Stream".
 //
 class FilterModule;
+class FilterModules;
 
 // The Unix philosophy encourages combining small, discrete tools to
 // accomplish larger tasks.  Reference:
@@ -85,8 +86,8 @@ class FilterModule;
 class CRTSFilter
 {
     public:
-        
-        // Function to write to this.
+
+        // Function to write data to this filter.
         //
         // This stream gets data when this is called by the "writer" and
         // in response may call this may call the reader->write().  This
@@ -146,7 +147,7 @@ class CRTSFilter
         // If a channel is not "connected" this does nothing or fails.
         //
         // writePush() may be called many times in a given write() call.
-        // writePush() manages its self keeping track of how many channels
+        // writePush() manages itself keeping track of how many channels
         // there are just from the calls to writePush(), there is no need
         // to create channels explicitly, but we can manage channels
         // explicitly too.
@@ -162,13 +163,13 @@ class CRTSFilter
         // is in a different thread.  This will recycle buffers.
         // This will block if we have the maximum number of buffers
         // in this circular buffer queue.
-        void *getBuffer(size_t bufferLen);
+        void *getBuffer(size_t bufferLen, bool canReuse=true);
 
         // Releases a buffer lock if this module has a different thread
         // than the module that wrote to this module.  The module may
         // hold more than one lock, so that adjacent buffers may be
         // compared without memory copies.
-        void releaseBuffer(void *buffer, ssize_t nWritten);
+        void releaseBuffer(void *buffer);
 
         // Think how many total packages can we handle on the conveyor
         // belts, held at the packagers (writers), and held at the
@@ -180,6 +181,21 @@ class CRTSFilter
         // the conveyor belt.
         void setBufferQueueLength(uint32_t n);
 
+    // The FilterModule has to manage the CRTSFilter adding readers and
+    // writers from between separate CRTSFilter objects.  This is better
+    // than exposing methods that should not be used by CRTSFilter
+    // implementers, because the user never knows what a FilterModule is
+    // the API (application programming interface) and ABI (application
+    // binary interface) never changes when FilterModule changes, whereby
+    // making this interface minimal and more stable.
+    //
+    // For example, we can add new functionality to CRTSFilter by adding
+    // code to the FilterModule class, and we would not even have to
+    // recompile the users CRTSFilter code, because the ABI does not
+    // change.
+    friend FilterModule;  // a filter with all the stuff
+    friend FilterModules; // a list of all the filters
+
 
     private:
 
@@ -188,14 +204,15 @@ class CRTSFilter
         // Buffer length needed/requested by this module.
         uint32_t bufferQueueLength;
 
+        // Pointer to the opaque FilterModule co-object.  The two objects
+        // could be one object, except that we need to hide the data and
+        // methods in the FilterModule part of it.  So CRTSFilter is the
+        // "public" user interface and FilterModule is the ugly opaque
+        // co-class that does the heavy lifting, which keeps the exposed
+        // parts of CRTSFilter smaller.
+        FilterModule *filterModule;
 
-    // The FilterModule has to manage the CRTSFilter adding readers and
-    // writers from between separate CRTSFilter objects.  May be better
-    // than exposing methods that should not be used by CRTSFilter
-    // implementers, because the user never knows what a FilterModule is
-    // the API and ABI never changes when FilterModule changes, whereby
-    // making this interface more stable.
-    friend FilterModule;
+
 
 };
 

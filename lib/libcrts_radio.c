@@ -3,7 +3,7 @@
 #include <stdbool.h>
 
 #include "crts.h"
-#include "debug.h"
+#include "crts/debug.h"
 
 
 #ifdef __cplusplus

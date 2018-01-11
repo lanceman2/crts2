@@ -25,12 +25,6 @@ undefine s
 
 readline.so_LDFLAGS := -lreadline
 
-#tun.so_SOURCES +=\
- $(ROOT)lib/getTunViaUSocket.cpp\
- $(ROOT)lib/debug.c
-tun.so_CPPFLAGS := -DSPEW_FILE=stderr -DDEBUG
-
-
 
 # above we auto generate lines like this:
 #*.so_SOURCES := *.cpp

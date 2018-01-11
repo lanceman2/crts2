@@ -1,18 +1,24 @@
-/** This file provides some CPP macro debug functions:
+#ifndef __debug_h__
+#define __debug_h__
+
+/** This file provides some CPP (C pre processor) macro debug functions:
  *
- * SPEW() ERROR() ASSERT() FAIL()
+ *    SPEW() ERROR() ASSERT() FAIL()
  *
  * and compile time conditionally:
  *
- * WARN() NOTICE() INFO() DSPEW() DASSERT()
+ *    WARN() NOTICE() INFO() DSPEW() DASSERT()
+ *
+ * see details below.
  *
  *
- * It's really not much but is a powerful development
+ *
+ * It's really not much code but is a powerful development
  * tool like assert.  See 'man assert'.
  *
+ * CRTSFilter builders do not have to include this file in their
+ * plugin modules.  It's pretty handy for developing/debugging.
  *
- * This debug.h/debug.c code is not intended to be part of the user
- * interface.
  */
 #include <stdbool.h>
 #include <errno.h>
@@ -22,10 +28,26 @@
 extern "C" {
 #endif
 
+/////////////////////////////////////////////////////////////////////////
+// This @ DEBUG @ will be either:  #define DEBUG
+//       or              // DEBUG is not defined
+/////////////////////////////////////////////////////////////////////////
+@DEBUG@
 
-#ifndef SPEW_FILE
-#  error "SPEW_FILE must be defined consistently"
-#endif
+
+/////////////////////////////////////////////////////////////////////////
+// This @ SPEW_LEVEL @ will be something like:
+//    #define SPEW_LEVEL_DEBUG
+// or #define SPEW_LEVEL_INFO
+// or #define SPEW_LEVEL_NOTICE
+// or #define SPEW_LEVEL_WARN
+// or #define SPEW_LEVEL_ERROR
+/////////////////////////////////////////////////////////////////////////
+@SPEW_LEVEL@
+
+
+
+#define SPEW_FILE stderr
 
 ///////////////////////////////////////////////////////////////////////////
 //
@@ -159,3 +181,4 @@ extern void _assertAction(FILE *stream);
 }
 #endif
 
+#endif // #ifndef __debug_h__

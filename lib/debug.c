@@ -11,7 +11,7 @@
 #  error "SYS_gettid unavailable on this system"
 #endif
 
-#include "debug.h"
+#include "crts/debug.h"
 
 
 static void _vspew(FILE *stream, int errn, const char *pre, const char *file,

@@ -22,10 +22,10 @@ ssize_t Stdout::write(void *buffer, size_t len, uint32_t channelNum)
 {
     ssize_t ret = fwrite(buffer, 1, len, crtsOut);
 
-    // This filter is a sink, the end of the line, so we do not need to
+    // This filter is a sink, the end of the line, so we do not
     // writePush().
 
-    releaseBuffer(buffer, ret);
+    releaseBuffer(buffer);
 
     return ret;
 }

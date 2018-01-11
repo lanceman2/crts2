@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <pthread.h>
 #include "liquid.h"
-#include "debug.h"
+#include "crts/debug.h"
 
 
 void *tcall(void *ptr)

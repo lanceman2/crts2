@@ -5,7 +5,8 @@ INSTALL_DIR = $(PREFIX)/crts/include
 
 INSTALLED :=\
  MakeModule.hpp\
- Filter.hpp
+ Filter.hpp\
+ debug.h
 
 
 include ../../quickbuild.make

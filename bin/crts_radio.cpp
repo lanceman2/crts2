@@ -15,19 +15,27 @@
 #include <atomic>
 #include <uhd/usrp/multi_usrp.hpp>
 
-#include "debug.h"
+#include "crts/debug.h"
 
 #include "get_opt.hpp"
 #include "LoadModule.hpp"
 // Read comments in ../include/crts/Filter.hpp.
 #include "crts/Filter.hpp"
+#include "FilterModule.hpp"
 #include "pthread_wrappers.h" // some pthread_*() wrappers
 
-class FilterModule;
 
-// A singleton factory of FilterModule class objects.
+// Most of this class code is hidden in just this program, so hiding and
+// exposing interfaces is not a big concern.  In other words, we do not
+// care so much about OOP (object orientated programming) in code that
+// will never see the user;  we just need clean and fast code with
+// minimal user interfaces.
+
+
+// A singleton factory of FilterModule class objects.  No need to
+// enforce the singleton-ness since this is not an exposed interface.
 //
-// Keeps a list (map) of FilterModules.
+// We keep a list (map) in FilterModules.
 class FilterModules : private std::map<uint32_t, FilterModule*>
 {
     public:
@@ -56,72 +64,32 @@ FilterModules::~FilterModules()
     DSPEW();
 }
 
-// A class for keeping the CRTSFilter loaded modules with other data.
-// Basically a stupid container struct, because we wanted to decrease the
-// amount of data in the CRTSFilter (private or otherwise) which will tend
-// to make the user interface change less.  We can add more stuff to this
-// and the user interface will not change at all.  Even adding private
-// data to the user interface in the class CRTSFilter will change the API
-// (application programming interface) and more importantly ABI
-// (application binary interface), so this cuts down on interface changes.
-//
-// And that's a big deal.
-class FilterModule
-{
-    public:
-
-        CRTSFilter *filter;
-
-        void *(*destroyFilter)(CRTSFilter *);
-
-        int loadIndex; // From FilterModules::loadCount
-
-        // Filter modules connections are made with Input writer
-        // and Output reader.
-        //
-        // reader reads what this module produces triggered by
-        // writer writes to this module.
-        //
-        // TODO: have multiple readers and writers giving forks and merges 
-        // in the stream flow.
-        //
-        //
-        //     SINK, SOURCE, and INTERMEDIATE filters:
-        //
-        // If there is no reader than this is a output stream filter
-        // (flow) terminator or SINK.  If there is no writer than this is
-        // a in stream filter (flow) terminator or SOURCE.  If there is a
-        // reader and a writer than this is a continuous flow, pass
-        // through, flow restriction, general stream, or in general a
-        // software INTERMEDIATE stream filter.
-        //
-        // We hide the private data and functions in class FilterModule
-        // so as to not pollute these interface header file.
-
-        std::list<CRTSFilter*>readers;
-        std::list<CRTSFilter*>writers;
-};
 
 
 // Return false on success.
 bool FilterModules::load(const char *name, int argc, const char **argv)
 {
-    FilterModule *sm = new FilterModule;
+    FilterModule *m = new FilterModule;
 
-    sm->filter = LoadModule<CRTSFilter>(name, "Filter",
-            argc, argv, sm->destroyFilter);
+    m->filter = LoadModule<CRTSFilter>(name, "Filters",
+            argc, argv, m->destroyFilter);
 
-    if(!sm->filter || !sm->destroyFilter)
+    if(!m->filter || !m->destroyFilter)
         goto fail;
 
-    this->insert(std::pair<uint32_t, FilterModule*>(++loadCount, sm));
-    sm->loadIndex = loadCount;
+    // The CRTSFilter needs a pointer to the FilterModule so that the
+    // "insides" of CRTSFilter can access opaque data in the FilterModule
+    // which is just the hidden parts of CRTSFilter.
+    m->filter->filterModule = m;
+
+    this->insert(std::pair<uint32_t, FilterModule*>(++loadCount, m));
+    m->loadIndex = loadCount;
     
     return false; // success
 
 fail:
 
-    delete sm;
+    delete m;
     return true; // failure
 }
 
@@ -154,12 +122,44 @@ bool FilterModules::connect(uint32_t from, uint32_t to)
     FilterModule *t = it->second;
 
 
-    // TODO: we need to fix this to get a mapping to the correct
-    // filters when stream can fork merge at a filter.
+    ////////////////////////////////////////////////////////////
+    // Connect these two filters in this direction
+    // like a doubly linked list from one filter to another.
+    ////////////////////////////////////////////////////////////
 
-    // connect these two filters in this direction:
-    f->readers.push_back(t->filter); // t is the reader
-    t->writers.push_back(f->filter); // f is the writer
+    // Currently using arrays to construct a doubly linked list
+    // which will allow very fast access, but slow editing.
+
+    // In the "f" filter we need to writePush() to readers telling the "t"
+    // reader filter it's channel index is the next one,
+    // t->filter->numWriters.  Think, we write to readers.
+
+    f->readers = (CRTSFilter**) realloc(f->readers,
+            sizeof(CRTSFilter*)*(f->numReaders+1));
+    ASSERT(f->readers, "realloc() failed");
+    f->readers[f->numReaders] = t->filter; // t is the reader from f
+
+    f->readerIndexes = (uint32_t *) realloc(f->readerIndexes,
+            sizeof(uint32_t)*(f->numReaders+1));
+    ASSERT(f->readerIndexes, "realloc() failed");
+    // We are the last channel in the "t" writer list
+    f->readerIndexes[f->numReaders] = t->numWriters;
+
+    // The "t" filter needs to point back to the "f" filter so that we can
+    // see and edit this connection from the "f" or "t" side, like it's a
+    // doubly linked list.  If not for editing this "connection list", we
+    // would not need this t->writers[].
+    t->writers = (CRTSFilter**) realloc(t->writers,
+            sizeof(CRTSFilter*)*(t->numWriters+1));
+    ASSERT(t->writers, "realloc() failed");
+    t->writers[t->numWriters] = f->filter; // f is the writer to t
+
+
+    ++f->numReaders;
+    ++t->numWriters;
+
+
+    DSPEW("Connected % " PRIu32 " to " PRIu32, from, to);
 
     return false; // success
 }
@@ -298,7 +298,7 @@ int main(int argc, const char **argv)
         // -1 terminated
         uint32_t connections[] =
         {
-            0, 1, 1, 2, // a single flow with no forks (splits or merges)
+            0, 1, 1, 2, 2, 3,// a single flow with no forks (splits or merges)
             // 0 being a source and 1 being a sink
             // 0 -> 1, 0 -> 2, is a split in the stream
             // 1 -> 3, 2 -> 3, is a merge in the stream
@@ -310,7 +310,7 @@ int main(int argc, const char **argv)
                 return 1; // fail
 
         for(uint32_t *i = connections;
-                *i != (uint32_t) -1 && *(i+1) != (uint32_t) -1 ;
+                *i != (uint32_t) -1 && *(i+1) != (uint32_t) -1;
                 ++i)
             if(filterModules.connect(*i, *(i+1)))
                 return 1;

@@ -1,7 +1,7 @@
 #include <time.h>
 #include <stdio.h>
 
-#include "debug.h"
+#include "crts/debug.h"
 #include "timer.hpp"
 
 
