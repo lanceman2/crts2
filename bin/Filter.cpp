@@ -1,22 +1,41 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 #include <inttypes.h>
+#include <atomic>
+#include <map>
 
 #include "crts/debug.h"
 #include "crts/Filter.hpp" // CRTSFilter user module interface
+#include "Stream.hpp"
 #include "FilterModule.hpp" // opaque co-class
 
 
-FilterModule::FilterModule(void):
+CRTSStream::CRTSStream(std::atomic<bool> &isRunning_in):
+    isRunning(isRunning_in)
+{
+
+}
+
+
+FilterModule::FilterModule(Stream *stream, CRTSFilter *filter_in,
+        void *(*destroyFilter_in)(CRTSFilter *), int32_t loadIndex_in):
+    filter(filter_in),
+    destroyFilter(destroyFilter_in),
+    loadIndex(loadIndex_in),
     readers(0), writers(0), readerIndexes(0),
     numReaders(0), numWriters(0)
 {
+    this->filter->filterModule = this;
+    this->filter->stream = new CRTSStream(stream->isRunning);
     DSPEW();
 }
 
 
 FilterModule::~FilterModule(void)
 {
+    
+
     DSPEW();
 
     // TODO: take down connections
@@ -37,35 +56,52 @@ FilterModule::~FilterModule(void)
 // TODO: Header is a lot of memory for nothing if this is not
 // a multi-threaded (or multi-process) app.
 
+
 struct Header
 {
+#ifdef DEBUG
+    uint64_t magic;
+#endif
     pthread_cond_t cond;
     pthread_mutex_t mutex;
     size_t len;
+
+    /* think padding HERE */
 };
 
 // A struct with added memory to the bottom of it.
 struct Buffer
 {
-    struct Header header;
+    struct Header header; // header must be first in struct
 
     // This pointer should stay aligned so we can offset
     // to this pointer and set this pointer to any struct
     // or array that we want.
+
+    /* think padding HERE */
+
     uint8_t ptr[1]; // just a pointer that already has 1 byte
     // plus the memory below this struct.  The compiler guarantees that
     // ptr is memory aligned because it is 1 byte in a structure.
+
+    /* think padding HERE TOO */
 };
 
-// Size of the buffer with added buf memory.
+// Size of the buffer with added x bytes of memory.
 #define BUFFER_SIZE(x)  (sizeof(struct Buffer) + (x-1))
 
 // To access the top of the buffer from the ptr pointer.
 #define BUFFER_HEADER(ptr)\
-    ((struct Header*) (((uint8_t*) ptr) - sizeof(struct Buffer) + 1))
+    ((struct Header*)\
+        (\
+            ((uint8_t*) ptr) \
+                - sizeof(struct Header)\
+        )\
+    )
 
+// Pointer to ptr in struct Buffer
 #define BUFFER_PTR(top)\
-    ((void*) (((uint8_t*) top) + sizeof(struct Buffer) - 1))
+    ((void*) (((struct Buffer *) top)->ptr))
 
 
 const uint32_t CRTSFilter::defaultBufferQueueLength = 3;
@@ -74,19 +110,32 @@ const uint32_t CRTSFilter::defaultBufferQueueLength = 3;
 CRTSFilter::~CRTSFilter(void) { DSPEW(); }
 
 
-CRTSFilter::CRTSFilter(void):
-    bufferQueueLength(CRTSFilter::defaultBufferQueueLength)
+CRTSFilter::CRTSFilter():
+        bufferQueueLength(CRTSFilter::defaultBufferQueueLength)
+        
 {
     DSPEW();
 }
 
 
-void CRTSFilter::writePush(void *buffer, size_t bufferLen, uint32_t channelNum)
+void CRTSFilter::writePush(void *buffer, size_t bufferLen,
+        uint32_t channelNum)
 {
+    DASSERT(buffer, "");
+    DASSERT(bufferLen, "");
+
+    // channelNum must be a reader channel in this filter
     DASSERT(filterModule->numReaders > channelNum,
             "!(filterModule->numReaders=%" PRIu32
             " > channelNum=%" PRIu32 ")",
             filterModule->numReaders, channelNum);
+    // the reader must have this filter as a writer channel
+    DASSERT(filterModule->readers[channelNum]->filterModule->numWriters >
+            filterModule->readerIndexes[channelNum],
+            "!(reader numWriters %" PRIu32
+            " > reader channel %" PRIu32 ")",
+            filterModule->readers[channelNum]->filterModule->numWriters,
+            filterModule->readerIndexes[channelNum]);
 
     // This filter writes to the connected reader filter at
     // the channel index channelNum.
@@ -117,13 +166,23 @@ void CRTSFilter::writePush(void *buffer, size_t bufferLen, uint32_t channelNum)
 //
 //   1.  through away the box (buffer); really we recycle it; or
 //
-//   2.  repackage the data using the same box (buffer) it can in
+//   2.  repackage the data using the same box (buffer)
 //
 //
+#ifdef DEBUG
+// TODO: pick a better magic salt
+// TODO: port to 32 bit
+#  define MAGIC ((uint64_t) 1224979098644774913)
+#endif
+
 void *CRTSFilter::getBuffer(size_t bufferLen, bool canReuse)
 {
     void *ret = malloc(BUFFER_SIZE(bufferLen));
     ASSERT(ret, "malloc() failed");
+#ifdef DEBUG
+    memset(ret, 0, bufferLen);
+    ((struct Header*) ret)->magic = MAGIC;
+#endif
     ((struct Buffer*) ret)->header.len = bufferLen;
     return BUFFER_PTR(ret);
 }
@@ -131,7 +190,16 @@ void *CRTSFilter::getBuffer(size_t bufferLen, bool canReuse)
 
 void CRTSFilter::releaseBuffer(void *buffer)
 {
+    DASSERT(buffer, "");
+#ifdef DEBUG
+    struct Header *h = BUFFER_HEADER(buffer);
+    DASSERT(h->magic == MAGIC, "Bad memory pointer");
+    //memset(BUFFER_HEADER(buffer), 0, bufferLen);
+    BUFFER_HEADER(buffer)->magic = 0;
+#endif
 
+
+    free(BUFFER_HEADER(buffer));
 }
 
 

@@ -4,8 +4,10 @@
 #include <inttypes.h>
 #include <pthread.h>
 #include <list>
+#include <atomic>
 
 #include <crts/MakeModule.hpp>
+
 
 // FilterModule is a opaque module thingy that the user need not worry
 // about much.  We just needed it to add stuff to the CRTSFilter that we
@@ -16,7 +18,33 @@
 // you string together to build a CRTS filter "Stream".
 //
 class FilterModule;
-class FilterModules;
+
+
+// CRTSStream is a user interface to set and get attributes of the Stream
+// which is the related to the group of Filters that are connected (write
+// and read) to each other.  There is a pointer to a CRTSStream in the
+// CRTSFilter called stream.
+//
+class CRTSStream
+{
+    public:
+
+        std::atomic<bool> &isRunning;
+
+    private:
+
+        // The CRTSFilter user does not make a CRTSStream.  It gets made
+        // for them, hence this constructor is private so they can't
+        // make one.
+        CRTSStream(std::atomic<bool> &isRunning);
+
+    // TODO: Add class to hide data in, in the private part of CRTSStream.
+    // Don't need any hidden data yet...
+
+    friend FilterModule;
+};
+
+
 
 // The Unix philosophy encourages combining small, discrete tools to
 // accomplish larger tasks.  Reference:
@@ -123,6 +151,8 @@ class CRTSFilter
 
         CRTSFilter(void);
 
+        CRTSStream *stream;
+
     protected:
 
         // User interface to write to the next module in the stream.
@@ -181,6 +211,12 @@ class CRTSFilter
         // the conveyor belt.
         void setBufferQueueLength(uint32_t n);
 
+        // The stream is running and user may set this to cleanly
+        // shutdown the Stream (the group of all filters).
+        
+
+        std::atomic<bool> *isRunning;
+
     // The FilterModule has to manage the CRTSFilter adding readers and
     // writers from between separate CRTSFilter objects.  This is better
     // than exposing methods that should not be used by CRTSFilter
@@ -191,10 +227,10 @@ class CRTSFilter
     //
     // For example, we can add new functionality to CRTSFilter by adding
     // code to the FilterModule class, and we would not even have to
-    // recompile the users CRTSFilter code, because the ABI does not
-    // change.
+    // recompile the users CRTSFilter code, because the users CRTSFilter
+    // ABI does not change.  The cost is one pointer deference at most
+    // CRTSFilter methods.
     friend FilterModule;  // a filter with all the stuff
-    friend FilterModules; // a list of all the filters
 
 
     private:
@@ -211,9 +247,6 @@ class CRTSFilter
         // co-class that does the heavy lifting, which keeps the exposed
         // parts of CRTSFilter smaller.
         FilterModule *filterModule;
-
-
-
 };
 
 

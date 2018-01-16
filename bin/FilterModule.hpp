@@ -9,19 +9,25 @@
 //
 // And that's a big deal.
 //
+
+class Stream;
+
+
 // FilterModule is the hidden parts of CRTSFilter
 class FilterModule
 {
     public:
 
-        FilterModule(void);
+        FilterModule(Stream *stream, CRTSFilter *filter,
+                void *(*destroyFilter)(CRTSFilter *), int32_t loadIndex);
+
         ~FilterModule(void);
 
         CRTSFilter *filter; // users co-class
 
         void *(*destroyFilter)(CRTSFilter *);
 
-        int loadIndex; // From FilterModules::loadCount
+        int loadIndex; // From Stream::loadCount
 
         // Filter modules connections are made with Input writer
         // and Output reader.
@@ -67,4 +73,12 @@ class FilterModule
         uint32_t *readerIndexes;
         // The length of the reader arrays and the writer arrays:
         uint32_t numReaders, numWriters;
+
+
+    friend CRTSFilter; // CRTSFilter and FilterModule are co-classes
+    // (sister classes); i.e.  they share their data and methods.  We just
+    // made them in two classes so that we could add code to FilterModule
+    // without the users CRTSFilter inferface seeing changes to the
+    // FilterModule interface.  Call it interface hiding where the
+    // FilterModule is the hidden part of CRTSFilter.
 };

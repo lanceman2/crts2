@@ -11,6 +11,7 @@
 #include <pthread.h>
 #include <inttypes.h>
 #include <map>
+#include <list>
 #include <string>
 #include <atomic>
 #include <uhd/usrp/multi_usrp.hpp>
@@ -22,6 +23,7 @@
 // Read comments in ../include/crts/Filter.hpp.
 #include "crts/Filter.hpp"
 #include "FilterModule.hpp"
+#include "Stream.hpp"
 #include "pthread_wrappers.h" // some pthread_*() wrappers
 
 
@@ -32,69 +34,61 @@
 // minimal user interfaces.
 
 
-// A singleton factory of FilterModule class objects.  No need to
-// enforce the singleton-ness since this is not an exposed interface.
-//
-// We keep a list (map) in FilterModules.
-class FilterModules : private std::map<uint32_t, FilterModule*>
+
+// Compiles the list of sources after connections are finished being
+// added.
+void Stream::getSources(void)
 {
-    public:
+    sources.clear();
+    for(auto &val : map)
+        if(!val.second->writers)
+            // It has no writers so val->second is a FilterModule that is
+            // a source.
+            sources.push_back(val.second);
 
-        FilterModules(void);
-        ~FilterModules(void);
+    // We need there to be at least one source FilterModule
+    DASSERT(sources.size() > 0, "");
+}
 
-        bool load(const char *name, int argc, const char **argv);
 
-        bool connect(uint32_t from, uint32_t to);
-
-    private:
-
-        // Never decreases.
-        uint32_t loadCount;
-};
-
-FilterModules::FilterModules(): loadCount(0)
+Stream::Stream(): map(*this), isRunning(true), loadCount(0)
 {
     DSPEW();
 }
 
 
-FilterModules::~FilterModules()
+Stream::~Stream()
 {
+    sources.clear();
     DSPEW();
 }
 
 
 
 // Return false on success.
-bool FilterModules::load(const char *name, int argc, const char **argv)
+bool Stream::load(const char *name, int argc, const char **argv)
 {
-    FilterModule *m = new FilterModule;
+    FilterModule *m = 0;
 
-    m->filter = LoadModule<CRTSFilter>(name, "Filters",
-            argc, argv, m->destroyFilter);
+    void *(*destroyFilter)(CRTSFilter *);
 
-    if(!m->filter || !m->destroyFilter)
-        goto fail;
+    CRTSFilter *crtsFilter = LoadModule<CRTSFilter>(name, "Filters",
+            argc, argv, destroyFilter);
 
-    // The CRTSFilter needs a pointer to the FilterModule so that the
-    // "insides" of CRTSFilter can access opaque data in the FilterModule
-    // which is just the hidden parts of CRTSFilter.
-    m->filter->filterModule = m;
+    if(!crtsFilter || !destroyFilter)
+        return true; // fail
 
-    this->insert(std::pair<uint32_t, FilterModule*>(++loadCount, m));
-    m->loadIndex = loadCount;
-    
+    m = new FilterModule(this, crtsFilter, destroyFilter, loadCount);
+
+    this->insert(std::pair<uint32_t, FilterModule*>(loadCount, m));
+
+    ++loadCount;
+
     return false; // success
-
-fail:
-
-    delete m;
-    return true; // failure
 }
 
 // Return false on success.
-bool FilterModules::connect(uint32_t from, uint32_t to)
+bool Stream::connect(uint32_t from, uint32_t to)
 {
     if(from == to)
     {
@@ -159,16 +153,16 @@ bool FilterModules::connect(uint32_t from, uint32_t to)
     ++t->numWriters;
 
 
-    DSPEW("Connected % " PRIu32 " to " PRIu32, from, to);
+
+    DSPEW("Connected % " PRIu32 " to %" PRIu32, from, to);
 
     return false; // success
 }
 
-static FilterModules filterModules;
 
 
 
-// TODO: bool FilterModules::unload()
+// TODO: bool Stream::unload()
 
 
 
@@ -188,10 +182,20 @@ pthread_mutex_t fftw3_mutex = PTHREAD_MUTEX_INITIALIZER;
 //
 //   SIGINT is from Ctrl-C in a terminal.
 //
-static const int exitSignals[] = { SIGINT, 0/*0 terminator*/ };
+static const int exitSignals[] =
+{
+    SIGINT,
+    //
+    // TODO: add more clean exit signal numbers here.
+    //
+    0/*0 terminator*/
+};
 
 
 static pthread_t _mainThread = pthread_self();
+
+
+static Stream *stream = 0;
 
 
 // This is a module user interface that may be called from another thread.
@@ -205,8 +209,13 @@ void crtsExit(void)
     errno = pthread_kill(_mainThread, exitSignals[0]);
     // All we could do is try and report.
     WARN("Signal %d sent to main thread", exitSignals[0]);
-}
 
+    // TODO: cleanup all thread and processes
+
+    if(stream)
+        // Let is finish the last loop
+        stream->isRunning = false;
+}
 
 
 
@@ -227,7 +236,8 @@ static int usage(const char *argv0, const char *uopt=0)
         "\n"
         "  Usage: %s [OPTIONS]\n"
         "\n"
-        "    Run the Cognitive Radio Test System (CRTS) transmitter/receiver program.\n"
+        "    Run the Cognitive Radio Test System (CRTS) "
+        "transmitter/receiver program.\n"
         "\n"
           "\n", argv0);
 
@@ -238,7 +248,11 @@ static int usage(const char *argv0, const char *uopt=0)
 
 static void signalExitProgramCatcher(int sig)
 {
-    DSPEW("Caught signal %d", sig);
+    INFO("Caught signal %d waiting to cleanly exit", sig);
+
+    // Let is finish the last loop
+    stream->isRunning = false;
+
 
     // Tell the RX and TX threads to finish.
 }
@@ -265,9 +279,13 @@ int main(int argc, const char **argv)
         act.sa_flags = SA_RESETHAND;
         errno = 0;
         for(int i=0; exitSignals[i]; ++i)
+        {
             ASSERT(sigaction(exitSignals[i], &act, 0) == 0, "");
+            DSPEW("set clean exit catcher for signal %d", exitSignals[i]);
+        }
     }
 
+#if 0
     {
         // We must not let the threads created by the UHD API catch the
         // exit signals, so they will inherit the blocking of the exit
@@ -279,7 +297,15 @@ int main(int argc, const char **argv)
         errno = pthread_sigmask(SIG_BLOCK, &sigSet, NULL);
         ASSERT(errno == 0, "pthread_sigmask() failed");
     }
+#endif
 
+    // TODO: For now we get one stream for free without --stream on the
+    // command-line.  Each --stream arg on the command-line will make a
+    // new Stream for all following args until the next --stream which
+    // makes another.  It will have to be dynamically allocated because
+    // we will not know how many "Streams" there will be until we parse
+    // the command line.
+    stream = new Stream;
 
     {
         // Default list of modules.  0 terminated.
@@ -298,21 +324,21 @@ int main(int argc, const char **argv)
         // -1 terminated
         uint32_t connections[] =
         {
-            0, 1, 1, 2, 2, 3,// a single flow with no forks (splits or merges)
+            0, 1, 1, 2,// a single flow with no forks (splits or merges)
             // 0 being a source and 1 being a sink
             // 0 -> 1, 0 -> 2, is a split in the stream
             // 1 -> 3, 2 -> 3, is a merge in the stream
             (uint32_t) -1/*terminator*/
         };
 
-        for(const char **mod = modules; mod; mod++)
-            if(filterModules.load(*mod, argc-1, &argv[1]))
+        for(const char **mod = modules; *mod; mod++)
+            if(stream->load(*mod, argc-1, &argv[1]))
                 return 1; // fail
 
         for(uint32_t *i = connections;
                 *i != (uint32_t) -1 && *(i+1) != (uint32_t) -1;
-                ++i)
-            if(filterModules.connect(*i, *(i+1)))
+                i += 2)
+            if(stream->connect(*i, *(i+1)))
                 return 1;
 
 
@@ -323,11 +349,22 @@ int main(int argc, const char **argv)
     }
 
 
+    stream->getSources();
+
+    while(stream->isRunning)
+    {
+        for(auto &source : stream->sources)
+            source->filter->write(0,0,0);
+    }
+
+
     // RANT:
     //
     // It'd be real nice if the UHD API would document what is thread-safe
     // and what is not for all the API.  We can only guess how to use this
-    // stupid UHD API by looking at example codes.
+    // stupid UHD API by looking at example codes.  From the program
+    // crashes I've seen there are clearly some things that are not thread
+    // safe, or just bad code in libuhd.
     //
     // The structure of the UHD API implies that you should be able to use
     // a single uhd::usrp::multi_usrp::sptr to do both transmission and
@@ -379,6 +416,8 @@ int main(int argc, const char **argv)
     // We sometimes get
     // Floating point exception
     // and the program exits
+
+    delete stream;
 
     DSPEW("FINISHED");
 

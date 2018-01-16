@@ -17,16 +17,19 @@ class Stdin : public CRTSFilter
 
 Stdin::Stdin(int argc, const char **argv) {DSPEW();}
 
-ssize_t Stdin::write(void *buffer_in, size_t len_in, uint32_t channelNum)
+ssize_t Stdin::write(void *buffer, size_t len, uint32_t channelNum)
 {
-    if(feof(stdin)) return 0; // We are done.
-
     // This filter is a source so there no data passed to
     // whatever called this write().
-    DASSERT(buffer_in == 0, "");
+    DASSERT(buffer == 0, "");
 
-    const size_t len = 1024;
-    uint8_t *buffer = (uint8_t *) getBuffer(len);
+    if(feof(stdin)) return 0; // We are done.
+
+ 
+    // Recycle the buffer and len argument variables.
+    len = 1024;
+    buffer = (uint8_t *) getBuffer(len);
+    DASSERT(buffer, "");
 
     // This filter is a source, it reads stdin which is not a
     // part of this filter stream.
@@ -35,14 +38,10 @@ ssize_t Stdin::write(void *buffer_in, size_t len_in, uint32_t channelNum)
     if(ret != len)
         NOTICE("fread(,1,%zu,stdin) only read %zu bytes", len, ret);
 
-
     // Send this buffer to the next readers write call.
-    writePush(buffer, len);
+    writePush(buffer, len, channelNum);
 
-    // If this is a thread than let others use this buffer.
-    releaseBuffer(buffer);
-
-    return ret;
+    return len;
 }
 
 

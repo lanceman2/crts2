@@ -1,10 +1,9 @@
 #include <stdio.h>
 
+#include "crts/debug.h"
 #include "crts/Filter.hpp"
 #include "crts.h" // for:  FILE *crtsOut
 
-//#define DSPEW() /*empty macro*/
-#define DSPEW() fprintf(stderr, "%s:%d:%s()\n", __FILE__, __LINE__, __func__)
 
 class Stdout : public CRTSFilter
 {
@@ -16,15 +15,37 @@ class Stdout : public CRTSFilter
                 uint32_t channelNum);
 };
 
-Stdout::Stdout(int argc, const char **argv) {DSPEW();}
+
+Stdout::Stdout(int argc, const char **argv)
+{
+    DSPEW();
+}
 
 ssize_t Stdout::write(void *buffer, size_t len, uint32_t channelNum)
 {
-    ssize_t ret = fwrite(buffer, 1, len, crtsOut);
+    DASSERT(channelNum == 0, "");
+    DASSERT(buffer, "");
+    DASSERT(len, "");
 
-    // This filter is a sink, the end of the line, so we do not
-    // writePush().
+    // This filter is a sink, the end of the line, so we do not call
+    // writePush().  crtsOut is like stdout if not for libuhd screwing up
+    // stdout.   It writes crtsOut which is not part of the filter stream.
 
+    errno = 0;
+
+    size_t ret = fwrite(buffer, 1, len, crtsOut);
+
+    if(ret != len && errno == EINTR)
+    {
+        // One more try
+        errno = 0;
+        ret = fwrite(buffer, 1, len, crtsOut);
+    }
+
+    if(ret != len)
+        NOTICE("fwrite(,1,%zu,crtsOut) only read %zu bytes", len, ret);
+
+    // End of the filter stream line, so recycle the buffer.
     releaseBuffer(buffer);
 
     return ret;
