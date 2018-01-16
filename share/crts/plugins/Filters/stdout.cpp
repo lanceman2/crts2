@@ -37,7 +37,7 @@ ssize_t Stdout::write(void *buffer, size_t len, uint32_t channelNum)
 
     if(ret != len && errno == EINTR)
     {
-        // One more try
+        // One more try because
         errno = 0;
         ret = fwrite(buffer, 1, len, crtsOut);
     }
