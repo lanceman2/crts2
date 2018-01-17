@@ -12,6 +12,7 @@
 #include <inttypes.h>
 #include <map>
 #include <list>
+#include <vector>
 #include <string>
 #include <atomic>
 #include <uhd/usrp/multi_usrp.hpp>
@@ -27,13 +28,8 @@
 #include "pthread_wrappers.h" // some pthread_*() wrappers
 
 
-// Most of this class code is hidden in just this program, so hiding and
-// exposing interfaces is not a big concern.  In other words, we do not
-// care so much about OOP (object orientated programming) in code that
-// will never see the user;  we just need clean and fast code with
-// minimal user interfaces.
 
-
+std::list<Stream*> Stream::streams;
 
 // Compiles the list of sources after connections are finished being
 // added.
@@ -50,18 +46,45 @@ void Stream::getSources(void)
     DASSERT(sources.size() > 0, "");
 }
 
+Stream *Stream::createStream(void)
+{
+    DSPEW();
+    Stream *s = new Stream;
+    streams.push_back(s);
+    DSPEW("now there are %d Streams", streams.size());
+    return s;
+}
 
-Stream::Stream(): map(*this), isRunning(true), loadCount(0)
+
+Stream::Stream(void): map(*this),
+    isRunning(true), checkedConnections(false), loadCount(0)
 {
     DSPEW();
 }
 
 
-Stream::~Stream()
+Stream::~Stream(void)
 {
+    DSPEW();
+    
     sources.clear();
-    DSPEW();
+
+    streams.remove(this);
+
+    DSPEW("now there are %d Streams", streams.size());
 }
+
+void Stream::destroyStreams(void)
+{
+    DSPEW("streams.size()=%d", streams.size());
+
+    auto it = streams.begin();
+    for(;it != streams.end(); it = streams.begin())
+        delete (*it);
+
+    DSPEW("streams.size()=%d", streams.size());
+}
+    
 
 
 
@@ -153,6 +176,9 @@ bool Stream::connect(uint32_t from, uint32_t to)
     ++t->numWriters;
 
 
+    // Set this flag so we know there was at least one connection.
+    checkedConnections = true;
+
 
     DSPEW("Connected % " PRIu32 " to %" PRIu32, from, to);
 
@@ -195,9 +221,10 @@ static const int exitSignals[] =
 static pthread_t _mainThread = pthread_self();
 
 
-static Stream *stream = 0;
 
-
+// TODO: Extend this to work for the case when there is more than one
+// stream.
+//
 // This is a module user interface that may be called from another thread.
 //
 // Try to gracefully exit.
@@ -212,8 +239,8 @@ void crtsExit(void)
 
     // TODO: cleanup all thread and processes
 
-    if(stream)
-        // Let is finish the last loop
+    for(auto stream : Stream::streams)
+        // Let it finish the last loop:
         stream->isRunning = false;
 }
 
@@ -234,12 +261,40 @@ static int usage(const char *argv0, const char *uopt=0)
 
     printf(
         "\n"
-        "  Usage: %s [OPTIONS]\n"
+        "  Usage: %s OPTIONS\n",
+        argv0);
+
+    printf(
         "\n"
         "    Run the Cognitive Radio Test System (CRTS) "
         "transmitter/receiver program.\n"
+        " Some -f and -c argument options are required\n"
         "\n"
-          "\n", argv0);
+        "\n"
+        "                   OPTIONS\n"
+        "\n"
+        "\n"
+        "   -c | --connect LIST              how to connect the loaded filters"
+                                            "that are in the current stream\n"
+        "                                   Example:\n"
+        "\n"
+        "                                       -c \"0 1 1 2\"\n"
+        "\n"
+        "                                    connect from filter 0 to filter 1"
+                                            " and from filter 1 to filter 2.\n"
+        "                                    This option must follow all the"
+                                            " corresponding FILTER options\n"
+        "                                    Arguments follow a connection LIST"
+                                            " will be in a new Stream.\n"
+        "\n"
+        "\n"
+        "   -f | --filter FILTER [OPTS ...]   load filter module FILTER\n"
+        "\n"
+        "\n"
+        "\n"
+        "\n"
+        "\n"
+        "\n");
 
     return 1; // return error status
 }
@@ -250,20 +305,157 @@ static void signalExitProgramCatcher(int sig)
 {
     INFO("Caught signal %d waiting to cleanly exit", sig);
 
-    // Let is finish the last loop
-    stream->isRunning = false;
+    // Deal with multi-stream
+    // Let them finish the last/current loop
+
+    for(auto stream : Stream::streams)
+        stream->isRunning = false;
+}
+
+int setDefaultStreamConnections(Stream* &stream)
+{
+    // default connections: 0 1   1 2   2 3   3 4   4 5  ...
+    // default connections: 0 -> 1   1 -> 2   2 -> 3   3 -> 4   4 -> 5  ...
+
+    DASSERT(stream->checkedConnections == false, "");
+
+    uint32_t from = 0;
+
+    for(auto toFilterModule : *stream)
+        if(toFilterModule.second->loadIndex > 0)
+            if(stream->connect(from++, toFilterModule.second->loadIndex))
+                return 1; // fail
+
+    // We set this flag here in case there was just one filter and
+    // not really any connections.
+    stream->checkedConnections = true;
+
+    return 0; // success
+}
 
 
-    // Tell the RX and TX threads to finish.
+
+/////////////////////////////////////////////////////////////////////
+// Parsing command line arguments
+/////////////////////////////////////////////////////////////////////
+//
+static int parseArgs(int argc, const char **argv)
+{
+    // Current stream as a pointer.  There are none yet.
+    Stream *stream = 0;
+
+    class ConnectionPair // just two integers in a pair
+    {
+        public:
+            inline ConnectionPair(uint32_t from_, uint32_t to_):
+                    from(from_), to(to_)
+            { 
+                DSPEW("%" PRIu32 ",%" PRIu32, from, to);
+            };
+            // Cool, looks like the copy constructor is automatic.
+
+#if 1 // debugging
+            // Checking that memory is cleaned up.
+            inline ~ConnectionPair(void)
+            {
+                DSPEW("%" PRIu32 ",%" PRIu32, from, to);
+            };
+#endif
+            uint32_t from, to; // filter index pair starting with 0
+    };
+
+
+    int i = 1;
+    if(i >= argc)
+        return usage(argv[0]);
+
+    while(i < argc)
+    {
+        // These may get set if we have the necessary options:
+        std::string str;
+        int Argc = 0;
+        const char **Argv = 0;
+        double rx_freq = 0; // TODO: remove this.
+
+        if(get_opt(str, Argc, Argv, "-f", "--filter", argc, argv, i))
+        {
+            if(!stream)
+                // We add filters a new "current" stream until we add
+                // connections.
+                stream = Stream::createStream();
+
+            DSPEW("got optional arg filter:  %s", str.c_str());
+
+            // Add the filter to the current stream in the command-line.
+            stream->load(str.c_str(), Argc, Argv);
+            continue;
+        }
+
+        if((!strcmp("-c", argv[i]) || !strcmp("--connect", argv[i])))
+        {
+            ++i;
+
+            // We read the "from" and "to" channel indexes in pairs
+            while(i < argc + 2 &&
+                    argv[i][0] > '0' && argv[i][0] < '9' &&
+                    argv[i+1][0] > '0' && argv[i+1][0] < '9')
+            {
+                // the follow args are like:  0 1 1 2
+                // We get them in pairs like: 0 1 and 1 2
+                uint32_t from, to;
+                errno = 0;
+                from = strtoul(argv[i], 0, 10);
+                if(errno || from == ULONG_MAX)
+                    return usage(argv[0], argv[i]);
+                ++i;
+                to = strtoul(argv[i], 0, 10);
+                if(errno || to == ULONG_MAX)
+                    return usage(argv[0], argv[i]);
+                // Connect filters in the current stream.
+                if(stream->connect(from, to))
+                    return usage(argv[0], argv[i]);
+                ++i;
+            }
+
+            if(!stream->checkedConnections)
+                if(setDefaultStreamConnections(stream))
+                    return 1; // failure
+
+            // Ready to make a another stream if more filters are added.
+            stream = 0;
+            // The global Stream::streams will keep the list of streams
+            // for us.
+        }
+
+
+        if(get_opt_double(rx_freq, "-f", "--rx-freq", argc, argv, i))
+            // TODO: remove this if() block
+            continue;
+        
+        if(!strcmp("-h", argv[i]) || !strcmp("--help", argv[i]))
+            return usage(argv[0]);
+
+        return usage(argv[0], argv[i]);
+
+        //++i;
+    }
+
+    if(stream && !stream->checkedConnections)
+        setDefaultStreamConnections(stream);
+
+
+    // TODO: parse command line to change modules list, module arguments and
+    // module connectivity.
+
+    // TODO: Add checking of module connectivity, so that they make sense.
+
+    return 0; // success
 }
 
 
 
 int main(int argc, const char **argv)
 {
-    if(argc > 1)
-        return usage(argv[0]);
-
     // This will hang the process or thread if we catch the following
     // signals, so we can debug it and see what was wrong if we're
     // lucky.
@@ -285,8 +477,10 @@ int main(int argc, const char **argv)
         }
     }
 
-#if 0
+#if 0 // TODO: this code may be kruft, but could be used later.
     {
+        // TODO: this code may be kruft, but could be used later.
+
         // We must not let the threads created by the UHD API catch the
         // exit signals, so they will inherit the blocking of the exit
         // signals after we set them here in the main thread.
@@ -305,56 +499,51 @@ int main(int argc, const char **argv)
     // makes another.  It will have to be dynamically allocated because
     // we will not know how many "Streams" there will be until we parse
     // the command line.
-    stream = new Stream;
 
+    if(parseArgs(argc, argv))
+        return 1; // failure
+
+
+    ///////////////////////////////////////////////////////////////////
+    // TODO: Check that there are connections in the stream if not
+    // maybe make the "default" (0 1 1 2 2 3 ...) connections.
+    ///////////////////////////////////////////////////////////////////
+
+
+    for(auto stream : Stream::streams)
+        stream->getSources();
+
+    bool isRunning = true;
+
+    while(isRunning)
     {
-        // Default list of modules.  0 terminated.
-        // By default this runs like the UNIX program "cat"
-        const char *modules[] =
-        { 
-            "stdin", "passThrough", "stdout",
-            0
-        };
+#ifdef DEBUG
+        uint32_t numStreamsRunning = 0;
+#endif
 
-        // Default module flow connectivity: connect 0 -> 1, 1 -> 2, 2 -> 3
-        //
-        // Splitting a stream at a given filter is done 
-        //
-        // Connections are pairs of module array indexes that is
-        // -1 terminated
-        uint32_t connections[] =
+        isRunning = false;
+        for(auto stream : Stream::streams)
         {
-            0, 1, 1, 2,// a single flow with no forks (splits or merges)
-            // 0 being a source and 1 being a sink
-            // 0 -> 1, 0 -> 2, is a split in the stream
-            // 1 -> 3, 2 -> 3, is a merge in the stream
-            (uint32_t) -1/*terminator*/
-        };
+            if(stream->isRunning)
+            {
+                for(auto source : stream->sources)
+                {
+                    // Run it:
+                    source->filter->write(0,0,0);
 
-        for(const char **mod = modules; *mod; mod++)
-            if(stream->load(*mod, argc-1, &argv[1]))
-                return 1; // fail
+                    // Something ran so keep it running
+                    isRunning = true;
+                }
+            }
+#ifdef DEBUG
+            ++numStreamsRunning;
+#endif
 
-        for(uint32_t *i = connections;
-                *i != (uint32_t) -1 && *(i+1) != (uint32_t) -1;
-                i += 2)
-            if(stream->connect(*i, *(i+1)))
-                return 1;
-
-
-        // TODO: parse command line to change modules list, module arguments and
-        // module connectivity.
-
-        // TODO: Add checking of module connectivity, so that they make sense.
-    }
-
-
-    stream->getSources();
-
-    while(stream->isRunning)
-    {
-        for(auto &source : stream->sources)
-            source->filter->write(0,0,0);
+        }
+#ifdef DEBUG
+        if(numStreamsRunning != Stream::streams.size())
+            SPEW("%" PRIu32 " of %" PRIu32 " streams are running");
+#endif
     }
 
 
@@ -417,7 +606,8 @@ int main(int argc, const char **argv)
     // Floating point exception
     // and the program exits
 
-    delete stream;
+
+    Stream::destroyStreams();
 
     DSPEW("FINISHED");
 

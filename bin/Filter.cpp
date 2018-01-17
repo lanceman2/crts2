@@ -4,11 +4,13 @@
 #include <inttypes.h>
 #include <atomic>
 #include <map>
+#include <list>
 
 #include "crts/debug.h"
 #include "crts/Filter.hpp" // CRTSFilter user module interface
 #include "Stream.hpp"
 #include "FilterModule.hpp" // opaque co-class
+
 
 
 CRTSStream::CRTSStream(std::atomic<bool> &isRunning_in):

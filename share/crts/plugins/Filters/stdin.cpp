@@ -15,7 +15,16 @@ class Stdin : public CRTSFilter
 };
 
 
-Stdin::Stdin(int argc, const char **argv) {DSPEW();}
+Stdin::Stdin(int argc, const char **argv)
+{
+    DSPEW();
+#ifdef DEBUG // TODO: remove this DEBUG SPEW
+    DSPEW("  GOT ARGS");
+    for(int i=0; i<argc; ++i)
+        DSPEW("    ARG[%d]=\"%s\"", i, argv[i]);
+    DSPEW();
+#endif
+}
 
 ssize_t Stdin::write(void *buffer, size_t len, uint32_t channelNum)
 {
