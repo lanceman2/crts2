@@ -20,14 +20,14 @@ class Stdout : public CRTSFilter
 };
 
 
-Stdout::Stdout(int argc, const char **argv): totalOut(0), maxOut(1028)
+Stdout::Stdout(int argc, const char **argv): totalOut(0), maxOut(63)
 {
     DSPEW();
 }
 
+
 ssize_t Stdout::write(void *buffer, size_t len, uint32_t channelNum)
 {
-    DASSERT(channelNum == 0, "");
     DASSERT(buffer, "");
     DASSERT(len, "");
 
@@ -52,9 +52,6 @@ ssize_t Stdout::write(void *buffer, size_t len, uint32_t channelNum)
 
     if(ret != len)
         NOTICE("fwrite(,1,%zu,crtsOut) only read %zu bytes", len, ret);
-
-    // End of the filter stream line, so recycle the buffer.
-    releaseBuffer(buffer);
 
     if(totalOut >= maxOut)
     {

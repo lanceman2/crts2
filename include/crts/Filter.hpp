@@ -115,6 +115,8 @@ class CRTSFilter
 {
     public:
 
+        static const uint32_t ALL_CHANNELS;
+
         // Function to write data to this filter.
         //
         // This stream gets data when this is called by the "writer" and
@@ -199,7 +201,8 @@ class CRTSFilter
         // than the module that wrote to this module.  The module may
         // hold more than one lock, so that adjacent buffers may be
         // compared without memory copies.
-        void releaseBuffer(void *buffer);
+        // TODO: This is automatically done...
+        //void releaseBuffer(void *buffer);
 
         // Think how many total packages can we handle on the conveyor
         // belts, held at the packagers (writers), and held at the
@@ -211,16 +214,18 @@ class CRTSFilter
         // the conveyor belt.
         void setBufferQueueLength(uint32_t n);
 
+        static const uint32_t defaultBufferQueueLength;
+        
         // The stream is running and user may set this to cleanly
         // shutdown the Stream (the group of all filters).
         
-
         std::atomic<bool> *isRunning;
+
 
     // The FilterModule has to manage the CRTSFilter adding readers and
     // writers from between separate CRTSFilter objects.  This is better
     // than exposing methods that should not be used by CRTSFilter
-    // implementers, because the user never knows what a FilterModule is
+    // implementers. Because the user never knows what a FilterModule is,
     // the API (application programming interface) and ABI (application
     // binary interface) never changes when FilterModule changes, whereby
     // making this interface minimal and more stable.
@@ -230,15 +235,9 @@ class CRTSFilter
     // recompile the users CRTSFilter code, because the users CRTSFilter
     // ABI does not change.  The cost is one pointer deference at most
     // CRTSFilter methods.
-    friend FilterModule;  // a filter with all the stuff
-
+    friend FilterModule;  // The rest of the filter code and data.
 
     private:
-
-        static const uint32_t defaultBufferQueueLength;
-
-        // Buffer length needed/requested by this module.
-        uint32_t bufferQueueLength;
 
         // Pointer to the opaque FilterModule co-object.  The two objects
         // could be one object, except that we need to hide the data and

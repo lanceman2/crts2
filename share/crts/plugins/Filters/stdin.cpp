@@ -36,7 +36,8 @@ ssize_t Stdin::write(void *buffer, size_t len, uint32_t channelNum)
 
  
     // Recycle the buffer and len argument variables.
-    len = 1024;
+    len = 32;
+    // Get a buffer from the buffer pool.
     buffer = (uint8_t *) getBuffer(len);
     DASSERT(buffer, "");
 
@@ -47,8 +48,9 @@ ssize_t Stdin::write(void *buffer, size_t len, uint32_t channelNum)
     if(ret != len)
         NOTICE("fread(,1,%zu,stdin) only read %zu bytes", len, ret);
 
-    // Send this buffer to the next readers write call.
-    writePush(buffer, len, channelNum);
+    if(ret > 0)
+        // Send this buffer to the next readers write call.
+        writePush(buffer, ret, ALL_CHANNELS);
 
     return len;
 }

@@ -14,6 +14,7 @@
 #include <list>
 #include <vector>
 #include <string>
+#include <stack>
 #include <atomic>
 #include <uhd/usrp/multi_usrp.hpp>
 
@@ -46,20 +47,12 @@ void Stream::getSources(void)
     DASSERT(sources.size() > 0, "");
 }
 
-Stream *Stream::createStream(void)
-{
-    DSPEW();
-    Stream *s = new Stream;
-    streams.push_back(s);
-    DSPEW("now there are %d Streams", streams.size());
-    return s;
-}
-
 
 Stream::Stream(void): map(*this),
     isRunning(true), checkedConnections(false), loadCount(0)
 {
-    DSPEW();
+    streams.push_back(this);
+    DSPEW("now there are %d Streams", streams.size());
 }
 
 
@@ -101,7 +94,7 @@ bool Stream::load(const char *name, int argc, const char **argv)
     if(!crtsFilter || !destroyFilter)
         return true; // fail
 
-    m = new FilterModule(this, crtsFilter, destroyFilter, loadCount);
+    m = new FilterModule(this, crtsFilter, destroyFilter, loadCount, name);
 
     this->insert(std::pair<uint32_t, FilterModule*>(loadCount, m));
 
@@ -151,10 +144,10 @@ bool Stream::connect(uint32_t from, uint32_t to)
     // reader filter it's channel index is the next one,
     // t->filter->numWriters.  Think, we write to readers.
 
-    f->readers = (CRTSFilter**) realloc(f->readers,
-            sizeof(CRTSFilter*)*(f->numReaders+1));
+    f->readers = (FilterModule**) realloc(f->readers,
+            sizeof(FilterModule*)*(f->numReaders+1));
     ASSERT(f->readers, "realloc() failed");
-    f->readers[f->numReaders] = t->filter; // t is the reader from f
+    f->readers[f->numReaders] = t; // t is the reader from f
 
     f->readerIndexes = (uint32_t *) realloc(f->readerIndexes,
             sizeof(uint32_t)*(f->numReaders+1));
@@ -166,10 +159,10 @@ bool Stream::connect(uint32_t from, uint32_t to)
     // see and edit this connection from the "f" or "t" side, like it's a
     // doubly linked list.  If not for editing this "connection list", we
     // would not need this t->writers[].
-    t->writers = (CRTSFilter**) realloc(t->writers,
-            sizeof(CRTSFilter*)*(t->numWriters+1));
+    t->writers = (FilterModule**) realloc(t->writers,
+            sizeof(FilterModule*)*(t->numWriters+1));
     ASSERT(t->writers, "realloc() failed");
-    t->writers[t->numWriters] = f->filter; // f is the writer to t
+    t->writers[t->numWriters] = f; // f is the writer to t
 
 
     ++f->numReaders;
@@ -180,7 +173,10 @@ bool Stream::connect(uint32_t from, uint32_t to)
     checkedConnections = true;
 
 
-    DSPEW("Connected % " PRIu32 " to %" PRIu32, from, to);
+    DSPEW("Connected filter % " PRIu32 "(%s) writes to %" PRIu32 "(%s)",
+            from, f->name.c_str(), to, t->name.c_str());
+
+
 
     return false; // success
 }
@@ -265,38 +261,135 @@ static int usage(const char *argv0, const char *uopt=0)
         argv0);
 
     printf(
-        "\n"
-        "    Run the Cognitive Radio Test System (CRTS) "
-        "transmitter/receiver program.\n"
-        " Some -f and -c argument options are required\n"
-        "\n"
-        "\n"
-        "                   OPTIONS\n"
-        "\n"
-        "\n"
-        "   -c | --connect LIST              how to connect the loaded filters"
-                                            "that are in the current stream\n"
-        "                                   Example:\n"
-        "\n"
-        "                                       -c \"0 1 1 2\"\n"
-        "\n"
-        "                                    connect from filter 0 to filter 1"
-                                            " and from filter 1 to filter 2.\n"
-        "                                    This option must follow all the"
-                                            " corresponding FILTER options\n"
-        "                                    Arguments follow a connection LIST"
-                                            " will be in a new Stream.\n"
-        "\n"
-        "\n"
-        "   -f | --filter FILTER [OPTS ...]   load filter module FILTER\n"
-        "\n"
-        "\n"
-        "\n"
-        "\n"
-        "\n"
-        "\n");
+"\n"
+"    Run the Cognitive Radio Test System (CRTS) "
+"transmitter/receiver program.\n"
+" Some -f options are required.  The filter stream is setup as the arguments\n"
+
+"\n"
+"\n"
+"                   OPTIONS\n"
+"\n"
+"\n"
+"   -c | --connect LIST              how to connect the loaded filters that are\n"
+"                                    in the current stream\n"
+"\n"
+"                                       Example:\n"
+"\n"
+"                                              -c \"0 1 1 2\"\n"
+"\n"
+"                                    connect from filter 0 to filter 1 and from\n"
+"                                    filter 1 to filter 2.  This option must\n"
+"                                    follow all the corresponding FILTER options\n"
+"                                    Arguments follow a connection LIST will be\n"
+"                                    in a new Stream.\n"
+"\n"
+"\n"
+"   -e | --exit                      exit the program.  Used if you just want to\n"
+"                                    print the DOT graph after building the graph.\n"
+"                                    Also may be useful in debugging your command\n"
+"                                    line.\n"
+"\n"
+"\n"
+"   -f | --filter FILTER [OPTS ...]  load filter module FILTER\n"
+"\n"
+"\n"
+"   -p | --print FILENAME            print a DOT graph to FILENAME.  This should be\n"
+"                                    the last option in the argument list.\n" 
+"\n"
+"\n");
 
     return 1; // return error status
+}
+
+
+// ref:
+//   https://en.wikipedia.org/wiki/DOT_(graph_description_language)
+//
+// Print a DOT graph to filename or PNG image of a directed graph
+// return false on success
+bool Stream::printGraph(const char *filename)
+{
+    DSPEW("Writing: %s", filename);
+
+    FILE *f;
+    size_t flen = strlen(filename);
+
+    if(flen > 4 && (!strcmp(&filename[flen - 4], ".png") ||
+            !strcmp(&filename[flen - 4], ".PNG")))
+    {
+        // Run dot and generate a PNG image file.
+        //
+        const char *pre = "dot -o "; // command to run without filename
+        char *command = (char *) malloc(strlen(pre) + flen + 1);
+        sprintf(command, "%s%s", pre, filename);
+        errno = 0;
+        f = popen(command, "w");
+        if(!f)
+        {
+            ERROR("popen(\"%s\", \"w\") failed", command);
+            free(command);
+            return true; // failure
+        }
+        free(command);
+        bool ret = printGraph(f);
+        pclose(f);
+        return ret;
+    }
+    
+    // else
+    // Generate a DOT graphviz file.
+    //
+    f = fopen(filename, "w");
+    if(!f)
+    {
+        ERROR("fopen(\"%s\", \"w\") failed", filename);
+        return true; // failure
+    }
+        
+    bool ret = printGraph(f);
+    fclose(f);
+    return ret;
+}
+
+bool Stream::printGraph(FILE *f)
+{
+    DASSERT(f, "");
+
+    uint32_t n = 0;
+
+    fprintf(f,
+            "// This is a generated file\n"
+            "\n"
+            "// This is a DOT graph file\n"
+            "//  https://en.wikipedia.org/wiki/DOT_(graph_description_language)\n"
+            "\n"
+    );
+
+    for(auto stream : streams)
+    {
+        fprintf(f, "digraph Stream_%" PRIu32 " {\n", n);
+
+        for(auto pair : *stream)
+        {
+            FilterModule *filterModule = pair.second;
+
+            fprintf(f, "  f%" PRIu32 " [label=\"%s(%" PRIu32 ")\"];\n",
+                    filterModule->loadIndex,
+                    filterModule->name.c_str(),
+                    filterModule->loadIndex);
+            
+            for(uint32_t i = 0; i < filterModule->numReaders; ++i)
+                fprintf(f, "  f%" PRIu32 " -> f%" PRIu32 ";\n",
+                        filterModule->loadIndex,
+                        filterModule->readers[i]->loadIndex);
+        }
+
+        fprintf(f, "}\n");
+
+        ++n;
+    }
+    return false; // success
 }
 
 
@@ -382,7 +475,7 @@ static int parseArgs(int argc, const char **argv)
             if(!stream)
                 // We add filters a new "current" stream until we add
                 // connections.
-                stream = Stream::createStream();
+                stream = new Stream;
 
             DSPEW("got optional arg filter:  %s", str.c_str());
 
@@ -393,23 +486,30 @@ static int parseArgs(int argc, const char **argv)
 
         if((!strcmp("-c", argv[i]) || !strcmp("--connect", argv[i])))
         {
+            if(!stream)
+            {
+                ERROR("No filters have been given yet");
+                return 1; // failure
+            }
+
+            
             ++i;
 
             // We read the "from" and "to" channel indexes in pairs
             while(i < argc + 2 &&
-                    argv[i][0] > '0' && argv[i][0] < '9' &&
-                    argv[i+1][0] > '0' && argv[i+1][0] < '9')
+                    argv[i][0] >= '0' && argv[i][0] <= '9' &&
+                    argv[i+1][0] >= '0' && argv[i+1][0] <= '9')
             {
                 // the follow args are like:  0 1 1 2
                 // We get them in pairs like: 0 1 and 1 2
                 uint32_t from, to;
                 errno = 0;
                 from = strtoul(argv[i], 0, 10);
-                if(errno || from == ULONG_MAX)
+                if(errno || from > 0xFFFFFFF0)
                     return usage(argv[0], argv[i]);
                 ++i;
                 to = strtoul(argv[i], 0, 10);
-                if(errno || to == ULONG_MAX)
+                if(errno || to > 0xFFFFFFF0)
                     return usage(argv[0], argv[i]);
                 // Connect filters in the current stream.
                 if(stream->connect(from, to))
@@ -425,13 +525,31 @@ static int parseArgs(int argc, const char **argv)
             stream = 0;
             // The global Stream::streams will keep the list of streams
             // for us.
+            continue;
         }
 
+        if(get_opt(str, Argc, Argv, "-p", "--print", argc, argv, i))
+        {
+            if(stream && !stream->checkedConnections)
+                if(setDefaultStreamConnections(stream))
+                    return 1; // failure
+
+            if(Stream::printGraph(str.c_str()))
+                return 1; // failure
+            continue;
+        }
 
         if(get_opt_double(rx_freq, "-f", "--rx-freq", argc, argv, i))
-            // TODO: remove this if() block
+            // TODO: remove this if() block. Just need as example of
+            // getting a double from command line argument option.
             continue;
-        
+
+        if(!strcmp("-e", argv[i]) || !strcmp("--exit", argv[i]))
+        {
+            DSPEW("Now exiting due to exit command line option");
+            exit(0);
+        }
+
         if(!strcmp("-h", argv[i]) || !strcmp("--help", argv[i]))
             return usage(argv[0]);
 
@@ -528,8 +646,9 @@ int main(int argc, const char **argv)
             {
                 for(auto source : stream->sources)
                 {
-                    // Run it:
-                    source->filter->write(0,0,0);
+                    // Run this source filterModule:
+                    source->write(0,0,0);
+
 
                     // Something ran so keep it running
                     isRunning = true;

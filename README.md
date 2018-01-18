@@ -8,7 +8,7 @@ Currently developing on:
 
 
 ```
-apt-get install build-essential libuhd-dev libreadline-dev
+apt-get install build-essential libuhd-dev libreadline-dev graphviz imagemagick
 ```
 
 Maybe more...

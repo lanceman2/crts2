@@ -5,12 +5,15 @@
 #include <atomic>
 #include <map>
 #include <list>
+#include <stack>
 
 #include "crts/debug.h"
 #include "crts/Filter.hpp" // CRTSFilter user module interface
 #include "Stream.hpp"
 #include "FilterModule.hpp" // opaque co-class
 
+
+const uint32_t CRTSFilter::ALL_CHANNELS = (uint32_t) -1;
 
 
 CRTSStream::CRTSStream(std::atomic<bool> &isRunning_in):
@@ -21,12 +24,14 @@ CRTSStream::CRTSStream(std::atomic<bool> &isRunning_in):
 
 
 FilterModule::FilterModule(Stream *stream, CRTSFilter *filter_in,
-        void *(*destroyFilter_in)(CRTSFilter *), int32_t loadIndex_in):
+        void *(*destroyFilter_in)(CRTSFilter *), int32_t loadIndex_in,
+        std::string name_in):
     filter(filter_in),
     destroyFilter(destroyFilter_in),
     loadIndex(loadIndex_in),
     readers(0), writers(0), readerIndexes(0),
-    numReaders(0), numWriters(0)
+    numReaders(0), numWriters(0), name(name_in),
+    bufferQueueLength(CRTSFilter::defaultBufferQueueLength)
 {
     this->filter->filterModule = this;
     this->filter->stream = new CRTSStream(stream->isRunning);
@@ -64,6 +69,7 @@ struct Header
 #ifdef DEBUG
     uint64_t magic;
 #endif
+    std::atomic<uint32_t> useCount;
     pthread_cond_t cond;
     pthread_mutex_t mutex;
     size_t len;
@@ -112,9 +118,7 @@ const uint32_t CRTSFilter::defaultBufferQueueLength = 3;
 CRTSFilter::~CRTSFilter(void) { DSPEW(); }
 
 
-CRTSFilter::CRTSFilter():
-        bufferQueueLength(CRTSFilter::defaultBufferQueueLength)
-        
+CRTSFilter::CRTSFilter()
 {
     DSPEW();
 }
@@ -127,23 +131,37 @@ void CRTSFilter::writePush(void *buffer, size_t bufferLen,
     DASSERT(bufferLen, "");
 
     // channelNum must be a reader channel in this filter
-    DASSERT(filterModule->numReaders > channelNum,
+    DASSERT(filterModule->numReaders > channelNum ||
+            channelNum == ALL_CHANNELS,
             "!(filterModule->numReaders=%" PRIu32
             " > channelNum=%" PRIu32 ")",
             filterModule->numReaders, channelNum);
     // the reader must have this filter as a writer channel
-    DASSERT(filterModule->readers[channelNum]->filterModule->numWriters >
+    DASSERT(channelNum == ALL_CHANNELS ||
+            filterModule->readers[channelNum]->numWriters >
             filterModule->readerIndexes[channelNum],
             "!(reader numWriters %" PRIu32
             " > reader channel %" PRIu32 ")",
-            filterModule->readers[channelNum]->filterModule->numWriters,
+            filterModule->readers[channelNum]->numWriters,
             filterModule->readerIndexes[channelNum]);
 
-    // This filter writes to the connected reader filter at
-    // the channel index channelNum.
-    filterModule->readers[channelNum]->write(buffer, bufferLen,
-            filterModule->readerIndexes[channelNum]);
+    //
+    // TODO: Add write failure mode .........
+    //
+
+    if(channelNum != ALL_CHANNELS)
+        // This filter writes to the connected reader filter at
+        // the channel index channelNum.
+        filterModule->readers[channelNum]->write(buffer, bufferLen,
+                filterModule->readerIndexes[channelNum]);
+    else
+        for(uint32_t i=0; i < filterModule->numReaders; ++i)
+            // This filter writes to the connected reader filter at
+            // the channel index channelNum.
+            filterModule->readers[i]->write(buffer, bufferLen,
+                    filterModule->readerIndexes[i]);
 }
+
 
 // It's up to the filter to do buffer pass through, or buffer transfer.
 //
@@ -179,33 +197,80 @@ void CRTSFilter::writePush(void *buffer, size_t bufferLen,
 
 void *CRTSFilter::getBuffer(size_t bufferLen, bool canReuse)
 {
-    void *ret = malloc(BUFFER_SIZE(bufferLen));
-    ASSERT(ret, "malloc() failed");
+    struct Buffer *buf = (struct Buffer *) malloc(BUFFER_SIZE(bufferLen));
+    ASSERT(buf, "malloc() failed");
 #ifdef DEBUG
-    memset(ret, 0, bufferLen);
-    ((struct Header*) ret)->magic = MAGIC;
+    memset(buf, 0, bufferLen);
+    ((struct Header*) buf)->magic = MAGIC;
 #endif
-    ((struct Buffer*) ret)->header.len = bufferLen;
-    return BUFFER_PTR(ret);
+    buf->header.len = bufferLen;
+    buf->header.useCount = 1;
+    this->filterModule->buffers.push(buf);
+    return BUFFER_PTR(buf);
 }
 
 
-void CRTSFilter::releaseBuffer(void *buffer)
+static void releaseBuffer(struct Header *h)
 {
-    DASSERT(buffer, "");
+    DASSERT(h, "");
 #ifdef DEBUG
-    struct Header *h = BUFFER_HEADER(buffer);
     DASSERT(h->magic == MAGIC, "Bad memory pointer");
-    //memset(BUFFER_HEADER(buffer), 0, bufferLen);
-    BUFFER_HEADER(buffer)->magic = 0;
+    DASSERT(h->len > 0, "");
+    h->magic = 0;
+    memset(h, 0, h->len);
 #endif
 
+    WARN("freeing buffer=%p", h);
 
-    free(BUFFER_HEADER(buffer));
+    free(h);
 }
 
 
 void CRTSFilter::setBufferQueueLength(uint32_t n)
 {
-    bufferQueueLength = n;
+    filterModule->bufferQueueLength = n;
+}
+
+// This checks the buffers and calls the underlying filter writers
+// CRTSFilter::write()
+void FilterModule::write(void *buffer, size_t len, uint32_t channelNum)
+{
+
+    // TODO: this code will generate and use threads,
+    // and make the buffer thread safe.
+
+    struct Header *h = 0;
+
+    if(buffer)
+    {
+        DASSERT(len > 0, "");
+        h = BUFFER_HEADER(buffer);
+        // Mark this buffer as in use by this filter.
+        ++h->useCount;
+    }
+
+    // The write call can generate more writes() via
+    // CRTSFilter::writePush().  Call the CRTSFilter::write();
+    this->filter->write(buffer, len, channelNum);
+
+    while(!buffers.empty())
+    {
+        struct Header *header = (struct Header *) buffers.top();
+        uint32_t useCount = --header->useCount;
+
+DSPEW("header->useCount = %" PRIu32 , useCount);
+
+        if(useCount == 0)
+            releaseBuffer(header);
+        // else this buffer is being used in a filter in
+        // another thread.
+        buffers.pop();
+    }
+
+    if(h)
+    {
+        --h->useCount;
+        if(h->useCount == 0)
+            releaseBuffer(h);
+    }
 }

@@ -1,7 +1,9 @@
 // A factory of FilterModule class objects.
 // We keep a list (map) in Stream.
 //
-class Stream;
+// The FilterModules numbered by load index starting at 0
+// in the order given on the crts_radio command line.
+// That load index is the map key to find the FilterModule.
 //
 class Stream : public std::map<uint32_t, FilterModule*>
 {
@@ -24,12 +26,18 @@ class Stream : public std::map<uint32_t, FilterModule*>
         std::atomic<bool> isRunning;
 
         // Stream factory
-        static Stream *createStream(void);
-
+        Stream(void);
+        // list of all streams created
         static std::list<Stream*> streams;
 
         // Factory destructor
         static void destroyStreams(void);
+
+        // Print a DOT graph file that represents all the streams
+        // in the streams list.  Prints a PNG file if filename
+        // ends in ".png".
+        static bool printGraph(const char *filename);
+
 
         // It removes itself from the streams list
         ~Stream(void);
@@ -41,7 +49,7 @@ class Stream : public std::map<uint32_t, FilterModule*>
 
     private:
 
-        Stream(void);
+        static bool printGraph(FILE *f);
 
         // Never decreases.  Incremented with each new FilterModule.
         uint32_t loadCount;
