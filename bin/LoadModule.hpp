@@ -248,6 +248,11 @@ T *LoadModule(const char *path, const char *category, int argc,
         ret = 0;
         destroyer = 0;
     }
+    catch(std::string msg)
+    {
+        ERROR("Failed to load module: \"%s\"\n"
+                "exception thrown: \"%s\"", path, msg.c_str());
+    }
     catch(...)
     {
         ERROR("Failed to load module \"%s\""

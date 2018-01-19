@@ -26,17 +26,22 @@ Stdin::Stdin(int argc, const char **argv)
 #endif
 }
 
+
 ssize_t Stdin::write(void *buffer, size_t len, uint32_t channelNum)
 {
     // This filter is a source so there no data passed to
     // whatever called this write().
     DASSERT(buffer == 0, "");
 
-    if(feof(stdin)) return 0; // We are done.
+    if(feof(stdin)) 
+    {
+        stream->isRunning = false;
+        return 0; // We are done.
+    }
 
  
     // Recycle the buffer and len argument variables.
-    len = 32;
+    len = 1024;
     // Get a buffer from the buffer pool.
     buffer = (uint8_t *) getBuffer(len);
     DASSERT(buffer, "");
@@ -52,7 +57,7 @@ ssize_t Stdin::write(void *buffer, size_t len, uint32_t channelNum)
         // Send this buffer to the next readers write call.
         writePush(buffer, ret, ALL_CHANNELS);
 
-    return len;
+    return ret;
 }
 
 

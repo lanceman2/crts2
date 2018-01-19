@@ -2,6 +2,7 @@
 #  define _GNU_SOURCE
 #endif
 #include <dlfcn.h>
+#include <sys/wait.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <stdlib.h>
@@ -262,9 +263,9 @@ static int usage(const char *argv0, const char *uopt=0)
 
     printf(
 "\n"
-"    Run the Cognitive Radio Test System (CRTS) "
-"transmitter/receiver program.\n"
-" Some -f options are required.  The filter stream is setup as the arguments\n"
+"    Run the Cognitive Radio Test System (CRTS) transmitter/receiver program.\n"
+" Some -f options are required.  The filter stream is setup as the arguments are\n"
+" parsed, so stuff happens as the command line options are parsed.\n"
 
 "\n"
 "\n"
@@ -282,7 +283,19 @@ static int usage(const char *argv0, const char *uopt=0)
 "                                    filter 1 to filter 2.  This option must\n"
 "                                    follow all the corresponding FILTER options\n"
 "                                    Arguments follow a connection LIST will be\n"
-"                                    in a new Stream.\n"
+"                                    in a new Stream.  After this option and next\n"
+"                                    filter option with be in a new different stream\n"
+"                                    and the filter indexes will be reset back to 0.\n"
+"                                    If a connect option is not given after an\n"
+"                                    uninterrupted list of filter options than a\n"
+"                                    default connectivity will be setup that connects\n"
+"                                    all adjacent filters.\n"
+"\n"
+"\n"
+"   -d | --display                   display a DOT graph via dot and imagemagick\n"
+"                                    display program, before running the streams.\n"
+"                                    This option should be after filter options in\n"
+"                                    the command line.\n"
 "\n"
 "\n"
 "   -e | --exit                      exit the program.  Used if you just want to\n"
@@ -291,11 +304,14 @@ static int usage(const char *argv0, const char *uopt=0)
 "                                    line.\n"
 "\n"
 "\n"
-"   -f | --filter FILTER [OPTS ...]  load filter module FILTER\n"
+"   -f | --filter FILTER [OPTS ...]  load filter module FILTER passing the OPTS ...\n"
+"                                    arguments to the CRTS Filter constructor.\n"
 "\n"
 "\n"
 "   -p | --print FILENAME            print a DOT graph to FILENAME.  This should be\n"
-"                                    the last option in the argument list.\n" 
+"                                    after all filter options in the command line.  If\n"
+"                                    FILENAME ends with .png this will write a PNG\n"
+"                                    image file to FILENAME.\n"
 "\n"
 "\n");
 
@@ -310,9 +326,73 @@ static int usage(const char *argv0, const char *uopt=0)
 // return false on success
 bool Stream::printGraph(const char *filename)
 {
-    DSPEW("Writing: %s", filename);
-
+    DSPEW("Writing graph to: %s", filename);
     FILE *f;
+
+    if(!filename || !filename[0])
+    {
+        // In this case we run dot and display the images assuming
+        // the program "display" from imagemagick is installed in
+        // the users path.
+
+        errno = 0;
+        f = tmpfile();
+        if(!f)
+        {
+            ERROR("tmpfile() failed");
+            return true; // failure
+        }
+
+        bool ret = printGraph(f);
+        if(ret)
+        {
+            fclose(f);
+            return ret; // failure
+        }
+
+        fflush(f);
+        rewind(f);
+
+        pid_t pid = fork();
+        if(pid == 0)
+        {
+            // I'm the child
+            errno = 0;
+            if(0 != dup2(fileno(f), 0))
+            {
+                WARN("dup2(%d, %d) failed", fileno(f), 0);
+                exit(1);
+            }
+            DSPEW("Running dot|display");
+            // Now stdin is the DOT graph file
+            // If this fails there's nothing we need to do about it.
+            execl("/bin/bash", "bash", "-c", "dot|display", (char *) 0);
+            exit(1);
+        }
+        else if(pid >= 0)
+        {
+            // I'm the parent
+            fclose(f);
+
+            int status = 0;
+            NOTICE("waiting for child display process", status);
+            errno = 0;
+            // We wait for just this child.
+            if(pid == waitpid(pid, &status, 0))
+                NOTICE("child display process return status %d", status);
+            else
+                WARN("child display process gave a wait error");
+        }
+        else
+        {
+            ERROR("fork() failed");
+        }
+
+        return false; // success, at least we tried so many thing can fail
+        // that we can't catch all failures, like X11 display was messed
+        // up.
+    }
+
     size_t flen = strlen(filename);
 
     if(flen > 4 && (!strcmp(&filename[flen - 4], ".png") ||
@@ -352,43 +432,58 @@ bool Stream::printGraph(const char *filename)
     return ret;
 }
 
+
 bool Stream::printGraph(FILE *f)
 {
     DASSERT(f, "");
 
-    uint32_t n = 0;
+    uint32_t n = 0; // stream number
 
     fprintf(f,
             "// This is a generated file\n"
             "\n"
-            "// This is a DOT graph file\n"
+            "// This is a DOT graph file.  See:\n"
             "//  https://en.wikipedia.org/wiki/DOT_(graph_description_language)\n"
             "\n"
+            "// There are %zu filter streams in this graph.\n"
+            "\n", Stream::streams.size()
     );
+
+    fprintf(f, "digraph FilterStreams {\n");
 
     for(auto stream : streams)
     {
-        fprintf(f, "digraph Stream_%" PRIu32 " {\n", n);
 
         for(auto pair : *stream)
         {
             FilterModule *filterModule = pair.second;
 
-            fprintf(f, "  f%" PRIu32 " [label=\"%s(%" PRIu32 ")\"];\n",
-                    filterModule->loadIndex,
+            char wNodeName[64]; // writer node name
+
+            snprintf(wNodeName, 64, "f%" PRIu32 "_%" PRIu32, n,
+                    filterModule->loadIndex);
+
+            fprintf(f, "  %s [label=\"%s(%" PRIu32 ")\"];\n",
+                    wNodeName,
                     filterModule->name.c_str(),
                     filterModule->loadIndex);
-            
+
             for(uint32_t i = 0; i < filterModule->numReaders; ++i)
-                fprintf(f, "  f%" PRIu32 " -> f%" PRIu32 ";\n",
-                        filterModule->loadIndex,
+            {
+                char rNodeName[64]; // reader node name
+                snprintf(rNodeName, 64, "f%" PRIu32 "_%" PRIu32, n,
                         filterModule->readers[i]->loadIndex);
+
+                fprintf(f, "  %s -> %s;\n", wNodeName, rNodeName);
+            }
         }
 
-        fprintf(f, "}\n");
 
         ++n;
     }
+
+    fprintf(f, "}\n");
+
     return false; // success
 }
 
@@ -405,7 +500,8 @@ static void signalExitProgramCatcher(int sig)
         stream->isRunning = false;
 }
 
-int setDefaultStreamConnections(Stream* &stream)
+
+static int setDefaultStreamConnections(Stream* &stream)
 {
     // default connections: 0 1   1 2   2 3   3 4   4 5  ...
     // default connections: 0 -> 1   1 -> 2   2 -> 3   3 -> 4   4 -> 5  ...
@@ -423,13 +519,34 @@ int setDefaultStreamConnections(Stream* &stream)
     // not really any connections.
     stream->checkedConnections = true;
 
+    // It just so happens we only call this directly or indirectly from
+    // parseArgs where we make a new stream after each time we set default
+    // connections, so setting stream = 0 tells us that:
+    stream = 0;
+
     return 0; // success
 }
 
 
+// We happened to have more than one command line option that prints a DOT
+// graph. So we put common code here to keep things consistent.
+static inline int doPrint(Stream* &stream, const char *filename = 0)
+{
+    if(stream && !stream->checkedConnections)
+        if(setDefaultStreamConnections(stream))
+            return 1; // failure
+
+    if(Stream::printGraph(filename))
+        return 1; // failure
+
+    return 0; // success
+}
+
 
 /////////////////////////////////////////////////////////////////////
 // Parsing command line arguments
+//
+//  Butt ugly, but straight forward
 /////////////////////////////////////////////////////////////////////
 //
 static int parseArgs(int argc, const char **argv)
@@ -488,15 +605,16 @@ static int parseArgs(int argc, const char **argv)
         {
             if(!stream)
             {
-                ERROR("No filters have been given yet");
+                ERROR("At command line argument \"%s\": No "
+                        "filters have been given"
+                        " yet for the current stream", argv[i]);
                 return 1; // failure
             }
 
-            
             ++i;
 
             // We read the "from" and "to" channel indexes in pairs
-            while(i < argc + 2 &&
+            while(i + 1 < argc &&
                     argv[i][0] >= '0' && argv[i][0] <= '9' &&
                     argv[i+1][0] >= '0' && argv[i+1][0] <= '9')
             {
@@ -522,7 +640,6 @@ static int parseArgs(int argc, const char **argv)
                     return 1; // failure
 
             // Ready to make a another stream if more filters are added.
-            stream = 0;
             // The global Stream::streams will keep the list of streams
             // for us.
             continue;
@@ -530,12 +647,16 @@ static int parseArgs(int argc, const char **argv)
 
         if(get_opt(str, Argc, Argv, "-p", "--print", argc, argv, i))
         {
-            if(stream && !stream->checkedConnections)
-                if(setDefaultStreamConnections(stream))
-                    return 1; // failure
+            if(doPrint(stream, str.c_str()))
+                return 1; // error
+            continue;
+        }
 
-            if(Stream::printGraph(str.c_str()))
-                return 1; // failure
+        if(!strcmp("-d", argv[i]) || !strcmp("--display", argv[i]))
+        {
+            ++i;
+            if(doPrint(stream, str.c_str()))
+                return 1; // error
             continue;
         }
 
@@ -621,12 +742,9 @@ int main(int argc, const char **argv)
     if(parseArgs(argc, argv))
         return 1; // failure
 
-
     ///////////////////////////////////////////////////////////////////
-    // TODO: Check that there are connections in the stream if not
-    // maybe make the "default" (0 1 1 2 2 3 ...) connections.
+    // TODO: Check that connections in the stream make sense ???
     ///////////////////////////////////////////////////////////////////
-
 
     for(auto stream : Stream::streams)
         stream->getSources();
@@ -639,6 +757,39 @@ int main(int argc, const char **argv)
         uint32_t numStreamsRunning = 0;
 #endif
 
+    /* NOTE: THIS IS VERY IMPORTANT
+     *
+
+  Here's the general sequence/stack of filter "write" calls:
+
+
+  filter           function
+  ------    --------------------------
+
+    0        FilterModule::write()
+
+    0            CRTSFilter::write()
+
+    0                n X CRTSFilter::pushWrite()  (0 <= n <= numConnections)
+
+    1                    FilterModule::write()
+
+    1                        CRTSFilter::write()
+
+
+    ......... it keeps growing until ...
+
+
+    and filter 1 will add a similar stack of calls and the write
+    call stack grows until some FilterModule::write() triggers a call
+    to CRTSFilter::write() "in another thread" or they get to a SINK
+    CRTSFilter which does not call CRTSFilter::pushWrite().
+
+    The "in another thread" is the magic here.  The modules need not know
+    that they are running in different threads.
+
+     */
+
         isRunning = false;
         for(auto stream : Stream::streams)
         {
@@ -648,7 +799,6 @@ int main(int argc, const char **argv)
                 {
                     // Run this source filterModule:
                     source->write(0,0,0);
-
 
                     // Something ran so keep it running
                     isRunning = true;

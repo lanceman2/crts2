@@ -18,16 +18,14 @@ class PassThrough : public CRTSFilter
 // For now connect N to N
 PassThrough::PassThrough(int argc, const char **argv) {DSPEW();}
 
-ssize_t PassThrough::write(void *buffer, size_t len,
-        uint32_t channelNum)
+ssize_t PassThrough::write(void *buffer, size_t len, uint32_t channelNum)
 {
     DASSERT(buffer, "");
     DASSERT(len, "");
 
-    // TODO: For now just 0 -> 0 and 1 -> 1, and so on.
-
-    // Send this buffer to the next readers write call.
-    writePush(buffer, len, channelNum);
+    // Send this buffer to the next readers write call
+    // on all channels.
+    writePush(buffer, len, CRTSFilter::ALL_CHANNELS);
 
     return len;
 }

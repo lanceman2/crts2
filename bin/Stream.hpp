@@ -36,7 +36,7 @@ class Stream : public std::map<uint32_t, FilterModule*>
         // Print a DOT graph file that represents all the streams
         // in the streams list.  Prints a PNG file if filename
         // ends in ".png".
-        static bool printGraph(const char *filename);
+        static bool printGraph(const char *filename = 0);
 
 
         // It removes itself from the streams list
@@ -53,4 +53,4 @@ class Stream : public std::map<uint32_t, FilterModule*>
 
         // Never decreases.  Incremented with each new FilterModule.
         uint32_t loadCount;
-};
+ };

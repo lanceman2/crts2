@@ -2,7 +2,7 @@
 
 #include "crts/debug.h"
 #include "crts/Filter.hpp"
-#include "crts.h" // for:  FILE *crtsOut
+#include "crts/crts.h" // for:  FILE *crtsOut in place of stdout
 
 
 class Stdout : public CRTSFilter
@@ -11,8 +11,7 @@ class Stdout : public CRTSFilter
 
         Stdout(int argc, const char **argv);
 
-        ssize_t write(void *buffer, size_t bufferLen,
-                uint32_t channelNum);
+        ssize_t write(void *buffer, size_t bufferLen, uint32_t channelNum);
 
     private:
 
@@ -20,7 +19,7 @@ class Stdout : public CRTSFilter
 };
 
 
-Stdout::Stdout(int argc, const char **argv): totalOut(0), maxOut(63)
+Stdout::Stdout(int argc, const char **argv): totalOut(0), maxOut(-1)
 {
     DSPEW();
 }
@@ -38,20 +37,23 @@ ssize_t Stdout::write(void *buffer, size_t len, uint32_t channelNum)
 
     errno = 0;
 
-    size_t ret = fwrite(buffer, 1, len, crtsOut);
+    if(len + totalOut > maxOut)
+        // Let's not write more than maxOut.
+        len = maxOut - totalOut;
 
-    totalOut += ret;
+    size_t ret = fwrite(buffer, 1, len, crtsOut);
 
     if(ret != len && errno == EINTR)
     {
-        // One more try because
+        // One more try because we there interrupted.
         errno = 0;
-        ret = fwrite(buffer, 1, len, crtsOut);
-        totalOut += ret;
+        ret += fwrite(buffer, 1, len - ret, crtsOut);
     }
 
+    totalOut += ret;
+    
     if(ret != len)
-        NOTICE("fwrite(,1,%zu,crtsOut) only read %zu bytes", len, ret);
+        NOTICE("fwrite(,1,%zu,crtsOut) only wrote %zu bytes", len, ret);
 
     if(totalOut >= maxOut)
     {

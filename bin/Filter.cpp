@@ -220,7 +220,7 @@ static void releaseBuffer(struct Header *h)
     memset(h, 0, h->len);
 #endif
 
-    WARN("freeing buffer=%p", h);
+    //WARN("freeing buffer=%p", h);
 
     free(h);
 }
@@ -231,6 +231,8 @@ void CRTSFilter::setBufferQueueLength(uint32_t n)
     filterModule->bufferQueueLength = n;
 }
 
+
+// The buffer used here must be from this 
 // This checks the buffers and calls the underlying filter writers
 // CRTSFilter::write()
 void FilterModule::write(void *buffer, size_t len, uint32_t channelNum)
@@ -249,8 +251,8 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum)
         ++h->useCount;
     }
 
-    // The write call can generate more writes() via
-    // CRTSFilter::writePush().  Call the CRTSFilter::write();
+    // The write call can generate more writes() via module writer
+    // interface CRTSFilter::writePush().  Call the CRTSFilter::write();
     this->filter->write(buffer, len, channelNum);
 
     while(!buffers.empty())
@@ -258,7 +260,7 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum)
         struct Header *header = (struct Header *) buffers.top();
         uint32_t useCount = --header->useCount;
 
-DSPEW("header->useCount = %" PRIu32 , useCount);
+        //DSPEW("header->useCount = %" PRIu32 , useCount);
 
         if(useCount == 0)
             releaseBuffer(header);
