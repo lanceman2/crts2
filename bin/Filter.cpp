@@ -238,6 +238,7 @@ void CRTSFilter::setBufferQueueLength(uint32_t n)
     filterModule->bufferQueueLength = n;
 }
 
+#if 0
 static void *threadCallback(FilterModule *filterModule)
 {
     DASSERT(filtermodule, "");
@@ -257,6 +258,7 @@ static void *threadCallback(FilterModule *filterModule)
     }
     return 0;
 }
+#endif
 
 
 // The buffer used here must be from this 

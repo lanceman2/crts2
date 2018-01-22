@@ -11,6 +11,11 @@ Currently developing on:
 apt-get install build-essential libuhd-dev libreadline-dev graphviz imagemagick
 ```
 
+In addition, on broken Ubuntu system that mess up the libuhd-dev installation:
+```
+apt-get install libboost-all-dev
+```
+
 Maybe more...
 
 ## Installing from git clone source
