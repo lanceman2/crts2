@@ -42,10 +42,12 @@ class Stream : public std::map<uint32_t, FilterModule*>
         // It removes itself from the streams list
         ~Stream(void);
 
-        // We set this flag if the --connect (or -c) argument was given
-        // with the connection list (like -c 0 1 1 2) then this is set.
-        // This is so we can know to setup default connections.
-        bool checkedConnections;
+        // We set this, haveConnections, flag if the --connect (or -c)
+        // argument was given with the connection list (like -c 0 1 1 2)
+        // then this is set.  This is so we can know to setup default
+        // connections.
+        bool haveConnections; // Flag standing for having any connections
+        // at all.
 
     private:
 

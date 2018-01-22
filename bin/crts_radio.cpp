@@ -50,7 +50,7 @@ void Stream::getSources(void)
 
 
 Stream::Stream(void): map(*this),
-    isRunning(true), checkedConnections(false), loadCount(0)
+    isRunning(true), haveConnections(false), loadCount(0)
 {
     streams.push_back(this);
     DSPEW("now there are %d Streams", streams.size());
@@ -171,7 +171,7 @@ bool Stream::connect(uint32_t from, uint32_t to)
 
 
     // Set this flag so we know there was at least one connection.
-    checkedConnections = true;
+    haveConnections = true;
 
 
     DSPEW("Connected filter % " PRIu32 "(%s) writes to %" PRIu32 "(%s)",
@@ -453,6 +453,9 @@ bool Stream::printGraph(FILE *f)
 
     for(auto stream : streams)
     {
+        fprintf(f,
+                "\n"
+                "  // Stream index %d\n", n);
 
         for(auto pair : *stream)
         {
@@ -506,7 +509,7 @@ static int setDefaultStreamConnections(Stream* &stream)
     // default connections: 0 1   1 2   2 3   3 4   4 5  ...
     // default connections: 0 -> 1   1 -> 2   2 -> 3   3 -> 4   4 -> 5  ...
 
-    DASSERT(stream->checkedConnections == false, "");
+    DASSERT(stream->haveConnections == false, "");
 
     uint32_t from = 0;
 
@@ -517,7 +520,7 @@ static int setDefaultStreamConnections(Stream* &stream)
 
     // We set this flag here in case there was just one filter and
     // not really any connections.
-    stream->checkedConnections = true;
+    stream->haveConnections = true;
 
     // It just so happens we only call this directly or indirectly from
     // parseArgs where we make a new stream after each time we set default
@@ -532,9 +535,12 @@ static int setDefaultStreamConnections(Stream* &stream)
 // graph. So we put common code here to keep things consistent.
 static inline int doPrint(Stream* &stream, const char *filename = 0)
 {
-    if(stream && !stream->checkedConnections)
+    if(stream)
+    {
+        DASSERT(!stream->haveConnections, "");
         if(setDefaultStreamConnections(stream))
             return 1; // failure
+    }
 
     if(Stream::printGraph(filename))
         return 1; // failure
@@ -635,9 +641,22 @@ static int parseArgs(int argc, const char **argv)
                 ++i;
             }
 
-            if(!stream->checkedConnections)
+            if(!stream->haveConnections)
+            {
                 if(setDefaultStreamConnections(stream))
                     return 1; // failure
+                // setDefaultStreamConnections(stream) set stream = 0
+            }
+            else
+            {
+                // TODO: Add a check of all the connections in the stream
+                // here.  This is the only place we need to make sure they
+                // are connected in a way that make sense.
+                //
+                // We are done with this stream.  We'll make a new stream
+                // if the argument options require it.
+                stream = 0;
+            }
 
             // Ready to make a another stream if more filters are added.
             // The global Stream::streams will keep the list of streams
@@ -679,8 +698,11 @@ static int parseArgs(int argc, const char **argv)
         //++i;
     }
 
-    if(stream && !stream->checkedConnections)
+    if(stream)
+    {
+        DASSERT(!stream->haveConnections, "");
         setDefaultStreamConnections(stream);
+    }
 
 
     // TODO: parse command line to change modules list, module arguments and
