@@ -11,6 +11,7 @@
 #include "crts/Filter.hpp" // CRTSFilter user module interface
 #include "Stream.hpp"
 #include "FilterModule.hpp" // opaque co-class
+#include "pthread_wrappers.h"
 
 
 const uint32_t CRTSFilter::ALL_CHANNELS = (uint32_t) -1;
@@ -63,18 +64,24 @@ FilterModule::~FilterModule(void)
 // TODO: Header is a lot of memory for nothing if this is not
 // a multi-threaded (or multi-process) app.
 
+class ThreadWriter
+{
+    public:
+
+        pthread_cond_t cond;
+        pthread_mutex_t mutex;
+        FilterModule *filterModule;
+};
+
 
 struct Header
 {
 #ifdef DEBUG
     uint64_t magic;
 #endif
+    class ThreadWriter *threadWriter;
     std::atomic<uint32_t> useCount;
-    pthread_cond_t cond;
-    pthread_mutex_t mutex;
     size_t len;
-
-    /* think padding HERE */
 };
 
 // A struct with added memory to the bottom of it.
@@ -231,6 +238,26 @@ void CRTSFilter::setBufferQueueLength(uint32_t n)
     filterModule->bufferQueueLength = n;
 }
 
+static void *threadCallback(FilterModule *filterModule)
+{
+    DASSERT(filtermodule, "");
+
+    // A bunch of pointers on the stack.
+    pthread_mutex_t *mutex = filterModule->mutex;
+    pthread_cond_t *cond = filterModule->cond;
+
+    CRTSFilter *filter = filterModule->filter;
+    CRTSStream *stream = filter->stream;
+
+    while(stream->isRunning)
+    {
+        MUTEX_LOCK(mutex);
+        ASSERT((errno = pthread_cond_wait(cond, mutex)) == 0, "");
+
+    }
+    return 0;
+}
+
 
 // The buffer used here must be from this 
 // This checks the buffers and calls the underlying filter writers
@@ -251,8 +278,8 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum)
         ++h->useCount;
     }
 
-    // The write call can generate more writes() via module writer
-    // interface CRTSFilter::writePush().  Call the CRTSFilter::write();
+    // The CRTSFilter::write() call can generate more writes() via module
+    // writer interface CRTSFilter::writePush().
     this->filter->write(buffer, len, channelNum);
 
     while(!buffers.empty())

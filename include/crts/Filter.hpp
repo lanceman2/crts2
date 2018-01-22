@@ -29,6 +29,7 @@ class CRTSStream
 {
     public:
 
+        // A reference to the Stream isRunning flag.
         std::atomic<bool> &isRunning;
 
     private:
@@ -38,8 +39,6 @@ class CRTSStream
         // make one.
         CRTSStream(std::atomic<bool> &isRunning);
 
-    // TODO: Add class to hide data in, in the private part of CRTSStream.
-    // Don't need any hidden data yet...
 
     friend FilterModule;
 };
