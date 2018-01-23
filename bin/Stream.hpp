@@ -49,6 +49,16 @@ class Stream : public std::map<uint32_t, FilterModule*>
         bool haveConnections; // Flag standing for having any connections
         // at all.
 
+
+        // TODO: Check this out ...
+        // A lock for editing the this stream.
+        pthread_rwlock_t rwlock;
+
+
+        // A list of threads that run a list of filter modules.
+        std::map<ThreadGroup *,ThreadGroup *> threadGroups;
+
+
     private:
 
         static bool printGraph(FILE *f);

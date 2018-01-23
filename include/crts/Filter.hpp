@@ -44,7 +44,20 @@ class CRTSStream
 };
 
 
-
+// The CRTSFilter is the user component module base class.
+//
+// We use the word filter to refer to general data processing component.
+// Systems engineers would likely not want to refer to these
+// data processing components as filters, but strictly speaking they are
+// software filters, ref:  https://en.wikipedia.org/wiki/Filter_(software),
+// so we call them filters which is short for "software filters".
+// Some CRTSFilter objects have zero input, but the interface to these
+// filters with no inputs is the same as the filters with input, so they
+// are filters with null inputs.  We call them source filters.
+//
+// There are sink filters too. ...
+//
+//
 // The Unix philosophy encourages combining small, discrete tools to
 // accomplish larger tasks.  Reference:
 //
@@ -63,7 +76,7 @@ class CRTSStream
 // When these modules run the coding interfaces are such that we do not
 // have to know if these modules run on separate threads or not.  Wither
 // or not these modules run on different threads is decided at run time.
-// This is a requirement so that run time optimization is possible.
+// This is a requirement so that run/start time optimization is possible.
 //
 // Sometimes things are so simple that running a single thread is much
 // faster than running more than one thread; and sometimes processing in a
@@ -77,6 +90,7 @@ class CRTSStream
 // modules running in different processes, not just threads.  This should
 // be able to be added seamlessly at without changing the users CRTSFilter
 // code.
+//
 //
 //
 //         CRTSFilter trade-offs and considerations:
@@ -109,6 +123,11 @@ class CRTSStream
 // of like in optimization of MPI (massage passing interface) HPC (high
 // performance computing) applications, we have node/thread runtime
 // partitioning.
+//
+//
+// See REDHAWK
+// http://redhawksdr.github.io/Documentation/
+//
 //
 class CRTSFilter
 {
@@ -190,11 +209,10 @@ class CRTSFilter
         void writePush(void *buffer, size_t len, uint32_t channelNum = 0);
 
 
-        // Returns a locked buffer if this module has a reader that
-        // is in a different thread.  This will recycle buffers.
-        // This will block if we have the maximum number of buffers
-        // in this circular buffer queue.
-        void *getBuffer(size_t bufferLen, bool canReuse=true);
+        // Returns a buffer if this module has a reader that may be in
+        // a different thread.  We will recycle buffers automatically,
+        // as the CRTSFilter::write() stack is popped.
+        void *getBuffer(size_t bufferLen);
 
         // Releases a buffer lock if this module has a different thread
         // than the module that wrote to this module.  The module may
@@ -203,6 +221,14 @@ class CRTSFilter
         // TODO: This is automatically done...
         //void releaseBuffer(void *buffer);
 
+
+        // TODO: this...
+        //
+        // This maximum buffer queue length may be needed in the case
+        // there one of the filters in the stream is very slow compared to
+        // the others, and the feeding filters make a lot of buffers
+        // feeding this bottleneck.
+        //
         // Think how many total packages can we handle on the conveyor
         // belts, held at the packagers (writers), and held at the
         // receivers (readers).  This is the buffer queue that is between
@@ -211,10 +237,11 @@ class CRTSFilter
         //
         // Think: What is the maximum number of packages that will fit on
         // the conveyor belt.
-        void setBufferQueueLength(uint32_t n);
-
-        static const uint32_t defaultBufferQueueLength;
+        //void setBufferQueueLength(uint32_t n);
+        //
+        //static const uint32_t defaultBufferQueueLength;
         
+
         // The stream is running and user may set this to cleanly
         // shutdown the Stream (the group of all filters).
         

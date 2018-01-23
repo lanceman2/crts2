@@ -308,10 +308,17 @@ static int usage(const char *argv0, const char *uopt=0)
 "                                    arguments to the CRTS Filter constructor.\n"
 "\n"
 "\n"
+"   -h | --help                      print this help and exit\n"
+"\n"
+"\n"
+
 "   -p | --print FILENAME            print a DOT graph to FILENAME.  This should be\n"
 "                                    after all filter options in the command line.  If\n"
 "                                    FILENAME ends with .png this will write a PNG\n"
 "                                    image file to FILENAME.\n"
+"\n"
+"\n"
+"   -t | --thread LIST              run the LIST of filters in a thread\n"
 "\n"
 "\n");
 
@@ -466,10 +473,9 @@ bool Stream::printGraph(FILE *f)
             snprintf(wNodeName, 64, "f%" PRIu32 "_%" PRIu32, n,
                     filterModule->loadIndex);
 
-            fprintf(f, "  %s [label=\"%s(%" PRIu32 ")\"];\n",
+            fprintf(f, "  %s [label=\"%s\"];\n",
                     wNodeName,
-                    filterModule->name.c_str(),
-                    filterModule->loadIndex);
+                    filterModule->name.c_str());
 
             for(uint32_t i = 0; i < filterModule->numReaders; ++i)
             {
@@ -606,6 +612,67 @@ static int parseArgs(int argc, const char **argv)
             stream->load(str.c_str(), Argc, Argv);
             continue;
         }
+
+        if((!strcmp("-t", argv[i]) || !strcmp("--thread", argv[i])))
+        {
+            if(!stream)
+            {
+                ERROR("At command line argument \"%s\": No "
+                        "filters have been given"
+                        " yet for the current stream", argv[i]);
+                return 1; // failure
+            }
+
+            // We must have a finished (constructed) filter stream.
+            if(!stream->haveConnections)
+            {
+                if(setDefaultStreamConnections(stream))
+                    return 1; // failure
+                // setDefaultStreamConnections(stream) set stream = 0
+            }
+
+            ++i;
+
+            ThreadGroup *threadGroup = 0;
+
+             while(i < argc)
+             {
+                // the follow args are like:  0 1 2 ...
+                uint32_t fi; // filter index.
+                errno = 0;
+                fi = strtoul(argv[i], 0, 10);
+                if(errno || fi > 0xFFFFFFF0)
+                    return usage(argv[0], argv[i]);
+
+                auto it = stream->find(fi);
+                if(it == stream->end())
+                {
+                    ERROR("Bad filter index: %" PRIu32, fi);
+                    return usage(argv[0], argv[i-1]);
+                }
+                FilterModule *filterModule = it->second;
+                DASSERT(filterModule, "");
+
+                if(!threadGroup)
+                    threadGroup = new ThreadGroup(stream);
+
+                // This filterModule is a member of this group.
+                filterModule->threadGroup = threadGroup;
+
+                ++i;
+            }
+
+            if(!threadGroup)
+            {
+                ERROR("At command line argument \"%s\": No "
+                        "valid filter load indexes given", argv[i-1]);
+                return usage(argv[0], argv[i-1]);
+            }
+
+            // TODO: check the order of the filters in the threadGroup
+            // and make sure that it can work in that order...
+        }
+
 
         if((!strcmp("-c", argv[i]) || !strcmp("--connect", argv[i])))
         {
@@ -792,7 +859,7 @@ int main(int argc, const char **argv)
 
     0            CRTSFilter::write()
 
-    0                n X CRTSFilter::pushWrite()  (0 <= n <= numConnections)
+    0                n X CRTSFilter::writePush()  (0 <= n <= numConnections)
 
     1                    FilterModule::write()
 
@@ -805,7 +872,7 @@ int main(int argc, const char **argv)
     and filter 1 will add a similar stack of calls and the write
     call stack grows until some FilterModule::write() triggers a call
     to CRTSFilter::write() "in another thread" or they get to a SINK
-    CRTSFilter which does not call CRTSFilter::pushWrite().
+    CRTSFilter which does not call CRTSFilter::writePush().
 
     The "in another thread" is the magic here.  The modules need not know
     that they are running in different threads.

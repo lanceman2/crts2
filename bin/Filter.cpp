@@ -9,8 +9,8 @@
 
 #include "crts/debug.h"
 #include "crts/Filter.hpp" // CRTSFilter user module interface
-#include "Stream.hpp"
 #include "FilterModule.hpp" // opaque co-class
+#include "Stream.hpp"
 #include "pthread_wrappers.h"
 
 
@@ -24,6 +24,8 @@ CRTSStream::CRTSStream(std::atomic<bool> &isRunning_in):
 }
 
 
+//const uint32_t CRTSFilter::defaultBufferQueueLength = 3;
+
 FilterModule::FilterModule(Stream *stream, CRTSFilter *filter_in,
         void *(*destroyFilter_in)(CRTSFilter *), int32_t loadIndex_in,
         std::string name_in):
@@ -32,10 +34,14 @@ FilterModule::FilterModule(Stream *stream, CRTSFilter *filter_in,
     loadIndex(loadIndex_in),
     readers(0), writers(0), readerIndexes(0),
     numReaders(0), numWriters(0), name(name_in),
-    bufferQueueLength(CRTSFilter::defaultBufferQueueLength)
+    threadGroup(0)
+    //, bufferQueueLength(CRTSFilter::defaultBufferQueueLength)
 {
     this->filter->filterModule = this;
     this->filter->stream = new CRTSStream(stream->isRunning);
+    name += "(";
+    name += std::to_string(loadIndex);
+    name += ")";
     DSPEW();
 }
 
@@ -52,6 +58,37 @@ FilterModule::~FilterModule(void)
 }
 
 
+// Filters, by default, do not know if they run as a single separate
+// thread, of with a group filters that share a thread.  That is decided
+// from the thing that starts the scenario which runs the program crts_radio
+// via command-line arguments, or other high level interface.  We call it
+// filter thread (process) partitioning.
+//
+// TODO: Extend thread partitioning to thread and process partitioning.
+//
+// This buffer pool thing is so we can pass buffers between any number of
+// filters.  By not having this memory on the stack we enable the filter
+// to be able to past this buffer from one thread filter to another, and
+// so on down the line.
+//
+// A filter can choose to reuse and pass through a buffer that was passed
+// to it from a previous adjust filter, or it can add another buffer to
+// pass up stream using the first buffer as just an input buffer.
+//
+// So ya, cases are:
+//
+//   1.  through away the box (buffer); really we recycle it; or
+//
+//   2.  repackage the data using the same box (buffer)
+//
+//
+#ifdef DEBUG
+// TODO: pick a better magic salt
+#  define MAGIC ((uint64_t) 1224979098644774913)
+#endif
+
+
+
 // TODO: Figure out the how to do the simplified case when the
 // mutex and conditional is not needed and the filter we write
 // is in the same thread.
@@ -61,28 +98,25 @@ FilterModule::~FilterModule(void)
 
 // We make a buffer that adds extra header to the top of it.
 
-// TODO: Header is a lot of memory for nothing if this is not
-// a multi-threaded (or multi-process) app.
-
-class ThreadWriter
-{
-    public:
-
-        pthread_cond_t cond;
-        pthread_mutex_t mutex;
-        FilterModule *filterModule;
-};
-
 
 struct Header
 {
 #ifdef DEBUG
     uint64_t magic;
 #endif
-    class ThreadWriter *threadWriter;
+
+    // We must have the two ThreadGroup::mutex(es) for incoming and
+    // outgoing (nonNull) before changing this threadGroup pointer.
+    class ThreadGroup *threadGroup;
+
+    // If there are threadGroups then this
+    // mutex lock is held by the thread calling CTRSFilter::write().
+    pthread_mutex_t mutex;
+
     std::atomic<uint32_t> useCount;
-    size_t len;
+    size_t len; // is constant after being created
 };
+
 
 // A struct with added memory to the bottom of it.
 struct Buffer
@@ -93,7 +127,7 @@ struct Buffer
     // to this pointer and set this pointer to any struct
     // or array that we want.
 
-    /* think padding HERE */
+    /* think struct padding HERE */
 
     uint8_t ptr[1]; // just a pointer that already has 1 byte
     // plus the memory below this struct.  The compiler guarantees that
@@ -119,7 +153,133 @@ struct Buffer
     ((void*) (((struct Buffer *) top)->ptr))
 
 
-const uint32_t CRTSFilter::defaultBufferQueueLength = 3;
+static void *filterThreadWrite(ThreadGroup *threadGroup)
+{
+    DASSERT(threadGroup, "");
+
+    // Put some pointers on the stack.
+    pthread_mutex_t* mutex = &(threadGroup->mutex);
+    pthread_cond_t* cond = &(threadGroup->cond);
+
+    DASSERT(mutex, "");
+    DASSERT(cond, "");
+
+    std::atomic<bool> &isRunning = threadGroup->stream.isRunning;
+
+    FilterModule *filterModule;
+    struct Header *header;
+
+    DSPEW();
+    
+    MUTEX_LOCK(mutex);
+
+    while(isRunning)
+    {
+        // Here we will loose the mutex lock and block waiting
+        // for a conditional signal.
+        //
+        // WAITING FOR SIGNAL HERE
+        ASSERT((errno = pthread_cond_wait(cond, mutex)) == 0, "");
+
+        // Now we have the mutex lock again.
+
+        // The filter module may change in each loop.
+        DASSERT(threadGroup->filterModule, "");
+        DASSERT(threadGroup->filterModule->filter, "");
+        DASSERT(threadGroup->buffer, "");
+        DASSERT(threadGroup->buffer, "");
+        DASSERT(threadGroup->buffer->header.magic == MAGIC, "");
+
+        filterModule = threadGroup->filterModule;
+        header = &threadGroup->buffer->header;
+
+#ifdef DEBUG
+        if(!isRunning)
+            DSPEW("threadGroup->filterModule \"%s\""
+                    " finishing last write cycle",
+                    threadGroup->filterModule->name);
+#endif
+
+        filterModule->filter->write(
+                BUFFER_PTR(header),
+                header->len,
+                threadGroup->channel);
+
+#ifdef DEBUG
+        if(!isRunning)
+            DSPEW("threadGroup->filterModule \"%s\""
+                    " finished last write cycle",
+                    threadGroup->filterModule->name);
+#endif
+    }
+
+    MUTEX_UNLOCK(mutex);
+
+    DSPEW("filter \"%s\" thread returning", filterModule->name.c_str());
+
+    return 0;
+}
+
+
+void ThreadGroup::run(FilterModule *filterModule_in)
+{
+    DASSERT(filterModule_in, "");
+    DSPEW("Creating thread starting with filterModule \"%s\"",
+            filterModule_in->name);
+
+    filterModule = filterModule_in;
+
+    errno = 0;
+    ASSERT((errno = pthread_create(&thread, 0/*pthread_attr_t* */ ,
+                (void *(*) (void *)) filterThreadWrite,
+                (void *) this)) == 0, "");
+
+    DSPEW("Created thread starting with filterModule \"%s\"",
+            filterModule_in->name);
+}
+
+
+// We should have a write lock on the stream to call this.
+// TODO: or add a lock and unlock call to this.
+ThreadGroup::ThreadGroup(Stream *stream_in):
+    cond(PTHREAD_COND_INITIALIZER),
+    mutex(PTHREAD_MUTEX_INITIALIZER),
+    filterModule(0),
+    stream(*stream_in)
+{
+    // There dam well better be a Stream object,
+    DASSERT(stream_in, "");
+    // and it better be in a running mode.
+    DASSERT(stream.isRunning, "");
+
+    // Add this object to the list. 
+    stream.threadGroups[this] = this;
+    DSPEW();
+}
+
+
+// We should have a write lock on the stream to call this.
+// TODO: or add a lock and unlock call to this.
+ThreadGroup::~ThreadGroup()
+{
+    // We better be in stream shutdown mode.
+    DASSERT(!stream.isRunning, "");
+
+    if(filterModule)
+    {
+        errno = 0;
+        ASSERT((errno = pthread_join(thread, 0/*void **retval */) == 0), "");
+        DSPEW("thread joined");
+    }
+
+    // remove this object from the list.    
+    stream.threadGroups.erase(this);
+    DSPEW("thread joined");
+}
+
+
+
+
 
 
 CRTSFilter::~CRTSFilter(void) { DSPEW(); }
@@ -170,39 +330,10 @@ void CRTSFilter::writePush(void *buffer, size_t bufferLen,
 }
 
 
-// It's up to the filter to do buffer pass through, or buffer transfer.
-//
-// Filters, by default, do not know if they run as a single separate
-// thread, of with a group filters that share a thread.  That is decided
-// from the thing that starts the scenario which runs the program crts_radio
-// via command-line arguments, or other high level interface.  We call it
-// filter thread (process) partitioning.
-//
-// TODO: Extend thread partitioning to thread and process partitioning.
-//
-// This buffer pool thing is so we can pass buffers between any number of
-// filters.  By not having this memory on the stack we enable the filter
-// to be able to past this buffer from one thread filter to another, and
-// so on down the line.
-//
-// A filter can choose to reuse and pass through a buffer that was passed
-// to it from a previous adjust filter, or it can add another buffer to
-// pass up stream using the first buffer as just an input buffer.
-//
-// So ya, cases are:
-//
-//   1.  through away the box (buffer); really we recycle it; or
-//
-//   2.  repackage the data using the same box (buffer)
-//
-//
-#ifdef DEBUG
-// TODO: pick a better magic salt
-// TODO: port to 32 bit
-#  define MAGIC ((uint64_t) 1224979098644774913)
-#endif
 
-void *CRTSFilter::getBuffer(size_t bufferLen, bool canReuse)
+// This is called in CTRSFilter::write() to create a new buffer
+// that is automatically cleaned up at the end of it's use.
+void *CRTSFilter::getBuffer(size_t bufferLen)
 {
     struct Buffer *buf = (struct Buffer *) malloc(BUFFER_SIZE(bufferLen));
     ASSERT(buf, "malloc() failed");
@@ -213,6 +344,7 @@ void *CRTSFilter::getBuffer(size_t bufferLen, bool canReuse)
     buf->header.len = bufferLen;
     buf->header.useCount = 1;
     this->filterModule->buffers.push(buf);
+
     return BUFFER_PTR(buf);
 }
 
@@ -233,32 +365,13 @@ static void releaseBuffer(struct Header *h)
 }
 
 
+#if 0
 void CRTSFilter::setBufferQueueLength(uint32_t n)
 {
     filterModule->bufferQueueLength = n;
 }
-
-#if 0
-static void *threadCallback(FilterModule *filterModule)
-{
-    DASSERT(filtermodule, "");
-
-    // A bunch of pointers on the stack.
-    pthread_mutex_t *mutex = filterModule->mutex;
-    pthread_cond_t *cond = filterModule->cond;
-
-    CRTSFilter *filter = filterModule->filter;
-    CRTSStream *stream = filter->stream;
-
-    while(stream->isRunning)
-    {
-        MUTEX_LOCK(mutex);
-        ASSERT((errno = pthread_cond_wait(cond, mutex)) == 0, "");
-
-    }
-    return 0;
-}
 #endif
+
 
 
 // The buffer used here must be from this 

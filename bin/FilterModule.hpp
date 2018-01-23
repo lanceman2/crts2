@@ -12,6 +12,9 @@
 
 class Stream;
 
+class ThreadGroup;
+
+
 
 // FilterModule is the hidden parts of CRTSFilter
 class FilterModule
@@ -78,28 +81,24 @@ class FilterModule
 
         std::string name; // name from program crts_radio command line argv[]
 
-#if 0 // TODO: See if we need this
-
-        // We need to access this private pointer in the CRTSFilter
-        // without exposing it to the user in the filter base class
-        // CRTSFilter.
-        static inline FilterModule *getModuleFilter(CRTSFilter *f)
-        {
-            return f->filterModule;
-        }
-#endif
-
+ 
         // Buffer length needed/requested by this module.
         uint32_t bufferQueueLength;
 
-        // call the underlying CRTSFilter::write() functions.
+        // This write calls the underlying CRTSFilter::write() functions
+        // or signals a thread that calls the underlying
+        // CRTSFilter::write() function.
         void write(void *buffer, size_t len, uint32_t channelNum);
 
-    private:
 
-        // The buffers that this filter module using in a given write()
-        // call.
+        // The buffers that this filter module is using in a given
+        // CRTSFilter::write() call.
         std::stack<void *>buffers;
+
+
+        // the thread that this filter module is running in.
+        ThreadGroup *threadGroup;
+
 
 
     friend CRTSFilter; // CRTSFilter and FilterModule are co-classes
@@ -109,4 +108,43 @@ class FilterModule
     // FilterModule interface.  Call it interface hiding where the
     // FilterModule is the hidden part of CRTSFilter.
     friend Stream;
+};
+
+
+struct Buffer;
+
+// There are no ThreadGroup objects is there was no
+// --thread command-line options (or equivalent)
+//
+// There can be many filter modules associated with a given ThreadGroup.
+// This is just a wrap of a pthread and it's associated thread
+// synchronization primitives, and a little more stuff.
+class ThreadGroup
+{
+    public:
+
+        void run(FilterModule *filterModule);
+
+        ThreadGroup(Stream *stream);
+        ~ThreadGroup();
+
+        pthread_t thread;
+        pthread_cond_t cond;
+        pthread_mutex_t mutex;
+
+        // The Filter that will have it's CRTSFilter::write() called
+        // next.
+        FilterModule *filterModule;
+
+        // Current channel to write.
+        uint32_t channel;
+
+        // The buffer that this filter module needs use when calling
+        // CTRSFilter::write() to.
+        Buffer *buffer;
+
+
+        // stream is the fixed/associated Stream which contains
+        // any filter modules that may be involved.
+        Stream &stream;
 };
