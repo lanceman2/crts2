@@ -11,8 +11,8 @@
 //
 
 class Stream;
-
 class ThreadGroup;
+class CRTSFilter;
 
 
 
@@ -88,7 +88,8 @@ class FilterModule
         // This write calls the underlying CRTSFilter::write() functions
         // or signals a thread that calls the underlying
         // CRTSFilter::write() function.
-        void write(void *buffer, size_t len, uint32_t channelNum);
+        void write(void *buffer, size_t len,
+                uint32_t channelNum, bool toDifferentThread = false);
 
 
         // The buffers that this filter module is using in a given
@@ -99,6 +100,13 @@ class FilterModule
         // the thread that this filter module is running in.
         ThreadGroup *threadGroup;
 
+
+        // Is set from the CRTSFilter constructor and stays constant.
+        // Flag to say if this object can write to the buffer
+        // in CRTSFilter::write(buffer,,).  If this is not set the
+        // CRTSFIlter::write() function should not write to the buffer
+        // that is passed in the arguments.
+        bool canWriteBufferIn;
 
 
     friend CRTSFilter; // CRTSFilter and FilterModule are co-classes
@@ -116,6 +124,8 @@ struct Buffer;
 // There are no ThreadGroup objects is there was no
 // --thread command-line options (or equivalent)
 //
+// It groups filters with a running thread.
+//
 // There can be many filter modules associated with a given ThreadGroup.
 // This is just a wrap of a pthread and it's associated thread
 // synchronization primitives, and a little more stuff.
@@ -123,28 +133,57 @@ class ThreadGroup
 {
     public:
 
-        void run(FilterModule *filterModule);
+        // Launch the pthread via pthread_create()
+        // We separated starting the thread from the constructor so that
+        // the user and look at the connection and thread topology before
+        // starting the threads.
+        void run(void);
 
         ThreadGroup(Stream *stream);
+
+        // This will pthread_join() after setting a running flag.
         ~ThreadGroup();
 
         pthread_t thread;
         pthread_cond_t cond;
         pthread_mutex_t mutex;
 
-        // The Filter that will have it's CRTSFilter::write() called
-        // next.
-        FilterModule *filterModule;
 
-        // Current channel to write.
-        uint32_t channel;
+        // We let the main thread be 0 and this starts at 1
+        // This is fixed after the object creation.
+        // This is mostly so we can see small thread numbers like
+        // 0, 1, 2, 3, ... 8 whatever, not shit like 23431, 5634, ...
+        uint32_t threadNum;
 
-        // The buffer that this filter module needs use when calling
-        // CTRSFilter::write() to.
-        Buffer *buffer;
+        // Number of these objects created.
+        static uint32_t createCount;
 
+        static pthread_t mainThread;
 
         // stream is the fixed/associated Stream which contains
         // any filter modules that may be involved.
         Stream &stream;
+
+        // At each loop we may reset the buffer, len, and channel
+        // to call filterModule->filter->write(buffer, len, channel);
+
+        /////////////////////////////////////////////////////////////
+        //       All ThreadGroup data below here is changing data.
+        //       We must have the mutex just above to access it.
+        /////////////////////////////////////////////////////////////
+
+        // The Filter module that will have it's CRTSFilter::write() called
+        // next.  Set to 0 if this is none.
+        FilterModule *filterModule;
+
+        // buffer, len, channelNum are for calling 
+        // CRTSFilter::write(buffer, len, channelNum)
+        //
+        void *buffer;
+
+        // Buffer length
+        size_t len;
+
+        // Current channel to write.
+        uint32_t channelNum;
 };

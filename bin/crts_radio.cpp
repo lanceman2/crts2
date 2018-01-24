@@ -104,6 +104,7 @@ bool Stream::load(const char *name, int argc, const char **argv)
     return false; // success
 }
 
+
 // Return false on success.
 bool Stream::connect(uint32_t from, uint32_t to)
 {
@@ -215,9 +216,6 @@ static const int exitSignals[] =
 };
 
 
-static pthread_t _mainThread = pthread_self();
-
-
 
 // TODO: Extend this to work for the case when there is more than one
 // stream.
@@ -230,7 +228,7 @@ void crtsExit(void)
     errno = 0;
     // We signal using just the first exit signal in the list.
     INFO("Sending signal %d to main thread", exitSignals[0]);
-    errno = pthread_kill(_mainThread, exitSignals[0]);
+    errno = pthread_kill(ThreadGroup::mainThread, exitSignals[0]);
     // All we could do is try and report.
     WARN("Signal %d sent to main thread", exitSignals[0]);
 
@@ -266,7 +264,19 @@ static int usage(const char *argv0, const char *uopt=0)
 "    Run the Cognitive Radio Test System (CRTS) transmitter/receiver program.\n"
 " Some -f options are required.  The filter stream is setup as the arguments are\n"
 " parsed, so stuff happens as the command line options are parsed.\n"
-
+"\n"
+"    For you \"system engineers\" the term \"filter\" we mean software filter\n"
+" [https://en.wikipedia.org/wiki/Filter_(software)], module component node, or the\n"
+" loaded module code that runs and passes data to other loaded module code that\n"
+" runs and so on.  Component and node were just to generic a term in a software\n"
+" sense.  If you have a hard time stomaching this terminology consider that\n"
+" sources and sinks are just filters with null inputs and outputs correspondingly.\n"
+" The real reason maybe that the word \"component\" has more letters in it than\n"
+" the word \"filter\".   Maybe we should have used the word \"node\"; no too\n"
+" generic.  The most general usage the word filter implies a point in a flow, or\n"
+" stream.  The words component and node do not imply this in the most general\n"
+" usage; they have no associated flow.\n"
+"\n"
 "\n"
 "\n"
 "                   OPTIONS\n"
@@ -318,7 +328,9 @@ static int usage(const char *argv0, const char *uopt=0)
 "                                    image file to FILENAME.\n"
 "\n"
 "\n"
-"   -t | --thread LIST              run the LIST of filters in a thread\n"
+"   -t | --thread LIST              run the LIST of filters in a separate thread.\n"
+"/n                                 Without this argument option the program will run\n"
+"                                   all filters modules in a single thread.\n"
 "\n"
 "\n");
 
@@ -473,9 +485,13 @@ bool Stream::printGraph(FILE *f)
             snprintf(wNodeName, 64, "f%" PRIu32 "_%" PRIu32, n,
                     filterModule->loadIndex);
 
-            fprintf(f, "  %s [label=\"%s\"];\n",
+            // example f0_1 [label="stdin(0)\n1"] for thread 1
+            fprintf(f, "  %s [label=\"%s\n%" PRIu32 "\"];\n",
                     wNodeName,
-                    filterModule->name.c_str());
+                    filterModule->name.c_str(),
+                    (filterModule->threadGroup)?
+                        (filterModule->threadGroup->threadNum):0
+                    );
 
             for(uint32_t i = 0; i < filterModule->numReaders; ++i)
             {
@@ -623,14 +639,6 @@ static int parseArgs(int argc, const char **argv)
                 return 1; // failure
             }
 
-            // We must have a finished (constructed) filter stream.
-            if(!stream->haveConnections)
-            {
-                if(setDefaultStreamConnections(stream))
-                    return 1; // failure
-                // setDefaultStreamConnections(stream) set stream = 0
-            }
-
             ++i;
 
             ThreadGroup *threadGroup = 0;
@@ -668,6 +676,7 @@ static int parseArgs(int argc, const char **argv)
                         "valid filter load indexes given", argv[i-1]);
                 return usage(argv[0], argv[i-1]);
             }
+
 
             // TODO: check the order of the filters in the threadGroup
             // and make sure that it can work in that order...
@@ -857,13 +866,13 @@ int main(int argc, const char **argv)
 
     0        FilterModule::write()
 
-    0            CRTSFilter::write()
+    0            CRTSFilter::write() or just signal thread that calls this.
 
     0                n X CRTSFilter::writePush()  (0 <= n <= numConnections)
 
     1                    FilterModule::write()
 
-    1                        CRTSFilter::write()
+    1                        CRTSFilter::write() or just signal thread that ...
 
 
     ......... it keeps growing until ...

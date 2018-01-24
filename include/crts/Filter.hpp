@@ -169,7 +169,15 @@ class CRTSFilter
 
         virtual ~CRTSFilter(void);
 
-        CRTSFilter(void);
+        // The default canWriteBufferIn value is set just here.
+        // canWriteBufferIn tells the inner works of CRTSFilter that this
+        // module may be writing to the buffer that is passed to
+        // CRTSFilter::write(buffer,,).  That info is needed so that the
+        // buffer may be shared between threads without the buffer memory
+        // getting corrupted by having more than one thread access it
+        // at once.
+        CRTSFilter(bool canWriteBufferIn = true);
+
 
         CRTSStream *stream;
 
@@ -213,6 +221,21 @@ class CRTSFilter
         // a different thread.  We will recycle buffers automatically,
         // as the CRTSFilter::write() stack is popped.
         void *getBuffer(size_t bufferLen);
+
+
+        // releaseBuffer() is not required to be called.  It is used to
+        // free up the buffer that may be being accessed in another thread
+        // where by freeing up contention between threads that is
+        // associated with the sharing of buffers between threads.  You
+        // can call this in your modules CRTSFilter::write() when you know
+        // that CRTSFilter::write() is in a part of your code that may
+        // take a while and it will not access (read or write) to the
+        // buffer again in that call to CRTSFilter::write().
+        //
+        // What releaseBuffer() does is depends on filter module
+        // connection topology and thread grouping.  Using it may or may
+        // not make the stream run faster.  It just depends.
+        void releaseBuffer(void *buffer);
 
         // Releases a buffer lock if this module has a different thread
         // than the module that wrote to this module.  The module may

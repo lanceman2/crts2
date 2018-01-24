@@ -37,8 +37,12 @@ FilterModule::FilterModule(Stream *stream, CRTSFilter *filter_in,
     threadGroup(0)
     //, bufferQueueLength(CRTSFilter::defaultBufferQueueLength)
 {
-    this->filter->filterModule = this;
-    this->filter->stream = new CRTSStream(stream->isRunning);
+    // We will reuse filter->filterModule after using it
+    // as the bool canWriteBufferIn:
+    canWriteBufferIn = (filter->filterModule)?true:false;
+    filter->filterModule = this;
+
+    filter->stream = new CRTSStream(stream->isRunning);
     name += "(";
     name += std::to_string(loadIndex);
     name += ")";
@@ -105,14 +109,11 @@ struct Header
     uint64_t magic;
 #endif
 
-    // We must have the two ThreadGroup::mutex(es) for incoming and
-    // outgoing (nonNull) before changing this threadGroup pointer.
-    class ThreadGroup *threadGroup;
-
     // If there are threadGroups then this
     // mutex lock is held by the thread calling CTRSFilter::write().
     pthread_mutex_t mutex;
 
+    // Then useCount drops to zero we recycle this buffer.
     std::atomic<uint32_t> useCount;
     size_t len; // is constant after being created
 };
@@ -167,50 +168,70 @@ static void *filterThreadWrite(ThreadGroup *threadGroup)
     std::atomic<bool> &isRunning = threadGroup->stream.isRunning;
 
     FilterModule *filterModule;
-    struct Header *header;
 
     DSPEW();
-    
+
+ 
+    // mutex limits access to all the data in ThreadGroup starting at
+    // ThreadGroup::filterModule in the class declaration, which can
+    // and will be changed between loops.
+    //
     MUTEX_LOCK(mutex);
+
 
     while(isRunning)
     {
-        // Here we will loose the mutex lock and block waiting
-        // for a conditional signal.
-        //
-        // WAITING FOR SIGNAL HERE
-        ASSERT((errno = pthread_cond_wait(cond, mutex)) == 0, "");
+        if(!threadGroup->filterModule)
+            // Here we will loose the mutex lock and block waiting for a
+            // conditional signal.
+            //
+            // WAITING FOR SIGNAL HERE
+            ASSERT((errno = pthread_cond_wait(cond, mutex)) == 0, "");
+            // Now we have the mutex lock again.
+        // else
+        //    had a filterModule already set before we first got the lock
+        //    so we will skip waiting for the signal.  This if/else
+        //    overcomes the first loop startup race condition, without the
+        //    use of a barrier or something like that.
 
-        // Now we have the mutex lock again.
 
-        // The filter module may change in each loop.
+        // Now we have the mutex lock.
+
+        // The filter module and what is written will change in each loop.
         DASSERT(threadGroup->filterModule, "");
         DASSERT(threadGroup->filterModule->filter, "");
-        DASSERT(threadGroup->buffer, "");
-        DASSERT(threadGroup->buffer, "");
-        DASSERT(threadGroup->buffer->header.magic == MAGIC, "");
-
         filterModule = threadGroup->filterModule;
-        header = &threadGroup->buffer->header;
+
+        // We are a source (no writers) or we where passed a buffer
+        DASSERT((filterModule->writers && threadGroup->buffer) ||
+                !filterModule->writers, "");
+        // Check that the buffer is one of ours.
+        DASSERT(!filterModule->writers ||
+                BUFFER_HEADER(threadGroup->buffer)->magic == MAGIC, "");
 
 #ifdef DEBUG
         if(!isRunning)
             DSPEW("threadGroup->filterModule \"%s\""
                     " finishing last write cycle",
-                    threadGroup->filterModule->name);
+                    filterModule->name);
 #endif
 
         filterModule->filter->write(
-                BUFFER_PTR(header),
-                header->len,
-                threadGroup->channel);
+                threadGroup->buffer,
+                threadGroup->len,
+                threadGroup->channelNum);
 
 #ifdef DEBUG
         if(!isRunning)
             DSPEW("threadGroup->filterModule \"%s\""
                     " finished last write cycle",
-                    threadGroup->filterModule->name);
+                    filterModule->name);
 #endif
+
+        // If something wants to know, they can look at this pointer to
+        // see this thread is done with it's writes, and we mark that we
+        // are ready to wait for the next signal if we continue to loop.
+        threadGroup->filterModule = 0;
     }
 
     MUTEX_UNLOCK(mutex);
@@ -221,22 +242,21 @@ static void *filterThreadWrite(ThreadGroup *threadGroup)
 }
 
 
-void ThreadGroup::run(FilterModule *filterModule_in)
+void ThreadGroup::run(void)
 {
-    DASSERT(filterModule_in, "");
-    DSPEW("Creating thread starting with filterModule \"%s\"",
-            filterModule_in->name);
+    DSPEW("Creating writer thread");
 
-    filterModule = filterModule_in;
+    filterModule = 0;
 
     errno = 0;
     ASSERT((errno = pthread_create(&thread, 0/*pthread_attr_t* */ ,
                 (void *(*) (void *)) filterThreadWrite,
                 (void *) this)) == 0, "");
-
-    DSPEW("Created thread starting with filterModule \"%s\"",
-            filterModule_in->name);
 }
+
+
+uint32_t ThreadGroup::createCount = 0;
+pthread_t ThreadGroup::mainThread = pthread_self();
 
 
 // We should have a write lock on the stream to call this.
@@ -244,9 +264,11 @@ void ThreadGroup::run(FilterModule *filterModule_in)
 ThreadGroup::ThreadGroup(Stream *stream_in):
     cond(PTHREAD_COND_INITIALIZER),
     mutex(PTHREAD_MUTEX_INITIALIZER),
-    filterModule(0),
-    stream(*stream_in)
+    threadNum(++createCount),
+    stream(*stream_in),
+    filterModule(0)
 {
+    DASSERT(pthread_equal(mainThread, pthread_self()), "");
     // There dam well better be a Stream object,
     DASSERT(stream_in, "");
     // and it better be in a running mode.
@@ -262,15 +284,12 @@ ThreadGroup::ThreadGroup(Stream *stream_in):
 // TODO: or add a lock and unlock call to this.
 ThreadGroup::~ThreadGroup()
 {
+    DASSERT(pthread_equal(mainThread, pthread_self()), "");
     // We better be in stream shutdown mode.
+    // TODO: until we make threads more dynamic.
     DASSERT(!stream.isRunning, "");
 
-    if(filterModule)
-    {
-        errno = 0;
-        ASSERT((errno = pthread_join(thread, 0/*void **retval */) == 0), "");
-        DSPEW("thread joined");
-    }
+    ASSERT((errno = pthread_join(thread, 0/*void **retval */) == 0), "");
 
     // remove this object from the list.    
     stream.threadGroups.erase(this);
@@ -278,16 +297,16 @@ ThreadGroup::~ThreadGroup()
 }
 
 
-
-
-
-
 CRTSFilter::~CRTSFilter(void) { DSPEW(); }
 
 
-CRTSFilter::CRTSFilter()
+CRTSFilter::CRTSFilter(bool canWriteBufferIn):
+    // We use this pointer variable as a flag before we use it to be the
+    // pointer to the Filtermodule, just so we do not have to declare
+    // another variable in CRTSFilter.  See FilterModule::FilterModule().
+    filterModule(canWriteBufferIn?((FilterModule*) 1/*nonzero*/):0)
 {
-    DSPEW();
+    DSPEW("canWriteBufferIn=%d", canWriteBufferIn);
 }
 
 
@@ -316,17 +335,33 @@ void CRTSFilter::writePush(void *buffer, size_t bufferLen,
     // TODO: Add write failure mode .........
     //
 
+    FilterModule *to;
+
     if(channelNum != ALL_CHANNELS)
+    {
         // This filter writes to the connected reader filter at
         // the channel index channelNum.
-        filterModule->readers[channelNum]->write(buffer, bufferLen,
-                filterModule->readerIndexes[channelNum]);
+        to = filterModule->readers[channelNum];
+
+        to->write(buffer, bufferLen,
+                filterModule->readerIndexes[channelNum],
+                // Is this writing to a different thread?
+                (to->threadGroup != filterModule->threadGroup)?
+                true: false);
+    }
     else
+        // Write to all readers that we have.
         for(uint32_t i=0; i < filterModule->numReaders; ++i)
+        {
+            to = filterModule->readers[i];
             // This filter writes to the connected reader filter at
             // the channel index channelNum.
-            filterModule->readers[i]->write(buffer, bufferLen,
-                    filterModule->readerIndexes[i]);
+            to->write(buffer, bufferLen,
+                    filterModule->readerIndexes[i],
+                    // Is this writing to a different thread?
+                    (to->threadGroup != filterModule->threadGroup)?
+                    true: false);
+        }
 }
 
 
@@ -349,7 +384,14 @@ void *CRTSFilter::getBuffer(size_t bufferLen)
 }
 
 
-static void releaseBuffer(struct Header *h)
+void CRTSFilter::releaseBuffer(void *buffer)
+{
+    // TODO: WRITE THIS FUNCTION
+
+}
+
+
+static void freeBuffer(struct Header *h)
 {
     DASSERT(h, "");
 #ifdef DEBUG
@@ -374,10 +416,12 @@ void CRTSFilter::setBufferQueueLength(uint32_t n)
 
 
 
+
 // The buffer used here must be from this 
 // This checks the buffers and calls the underlying filter writers
 // CRTSFilter::write()
-void FilterModule::write(void *buffer, size_t len, uint32_t channelNum)
+void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
+        bool toDifferentThread)
 {
 
     // TODO: this code will generate and use threads,
@@ -388,14 +432,34 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum)
     if(buffer)
     {
         DASSERT(len > 0, "");
+        // TODO: We are assuming the buffer points to the returned pointer
+        // from getBuffer() but we need to extend this use to include
+        // pointing to any part of the allocated buffer, so the user can
+        // use the buffer as they see fit.
         h = BUFFER_HEADER(buffer);
+
+        // Check that the buffer is one of ours.
+        DASSERT(h->magic == MAGIC, "");
+
         // Mark this buffer as in use by this filter.
         ++h->useCount;
     }
 
-    // The CRTSFilter::write() call can generate more writes() via module
-    // writer interface CRTSFilter::writePush().
-    this->filter->write(buffer, len, channelNum);
+
+    if(threadGroup && toDifferentThread)
+    {
+        MUTEX_LOCK(&threadGroup->mutex);
+        threadGroup->filterModule = this;
+        threadGroup->buffer = buffer;
+        threadGroup->len = len;
+        threadGroup->channelNum = channelNum;
+        ASSERT((errno = pthread_cond_signal(&threadGroup->cond)) == 0, "");
+        MUTEX_UNLOCK(&threadGroup->mutex);
+    }
+    else
+        // The CRTSFilter::write() call can generate more writes() via module
+        // writer interface CRTSFilter::writePush().
+        this->filter->write(buffer, len, channelNum);
 
     while(!buffers.empty())
     {
@@ -405,7 +469,7 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum)
         //DSPEW("header->useCount = %" PRIu32 , useCount);
 
         if(useCount == 0)
-            releaseBuffer(header);
+            freeBuffer(header);
         // else this buffer is being used in a filter in
         // another thread.
         buffers.pop();
@@ -415,6 +479,6 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum)
     {
         --h->useCount;
         if(h->useCount == 0)
-            releaseBuffer(h);
+            freeBuffer(h);
     }
 }
