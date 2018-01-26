@@ -4,13 +4,16 @@
 #include "crts/Filter.hpp"
 #include "crts/crts.h" // for:  FILE *crtsOut in place of stdout
 
+#define DBDELETE
 
 class Stdout : public CRTSFilter
 {
     public:
 
         Stdout(int argc, const char **argv);
-
+#ifdef DBDELETE
+        ~Stdout(void);
+#endif
         ssize_t write(void *buffer, size_t bufferLen, uint32_t channelNum);
 
     private:
@@ -23,6 +26,14 @@ Stdout::Stdout(int argc, const char **argv): totalOut(0), maxOut(-1)
 {
     DSPEW();
 }
+
+
+#ifdef DBDELETE
+Stdout::~Stdout(void)
+{
+    DSPEW();
+}
+#endif
 
 
 ssize_t Stdout::write(void *buffer, size_t len, uint32_t channelNum)

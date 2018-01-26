@@ -3,12 +3,17 @@
 #include "crts/debug.h"
 #include "crts/Filter.hpp"
 
+#define DBDELETE
+
 
 class Stdin : public CRTSFilter
 {
     public:
 
         Stdin(int argc, const char **argv);
+#ifdef DBDELETE
+        ~Stdin(void);
+#endif
 
         ssize_t write(void *buffer, size_t bufferLen,
                 uint32_t channelNum);
@@ -18,7 +23,7 @@ class Stdin : public CRTSFilter
 Stdin::Stdin(int argc, const char **argv)
 {
     DSPEW();
-#ifdef DEBUG // TODO: remove this DEBUG SPEW
+#if 0 // TODO: remove this DEBUG SPEW
     DSPEW("  GOT ARGS");
     for(int i=0; i<argc; ++i)
         DSPEW("    ARG[%d]=\"%s\"", i, argv[i]);
@@ -26,6 +31,12 @@ Stdin::Stdin(int argc, const char **argv)
 #endif
 }
 
+#ifdef DBDELETE
+Stdin::~Stdin(void)
+{
+    DSPEW();
+}
+#endif
 
 ssize_t Stdin::write(void *buffer, size_t len, uint32_t channelNum)
 {

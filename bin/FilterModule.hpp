@@ -109,6 +109,9 @@ class FilterModule
         bool canWriteBufferIn;
 
 
+        void removeUnusedBuffers(void);
+
+
     friend CRTSFilter; // CRTSFilter and FilterModule are co-classes
     // (sister classes); i.e.  they share their data and methods.  We just
     // made them in two classes so that we could add code to FilterModule
@@ -171,6 +174,8 @@ class ThreadGroup
         //       All ThreadGroup data below here is changing data.
         //       We must have the mutex just above to access it.
         /////////////////////////////////////////////////////////////
+
+        bool hasReturned; // the thread returned from its callback
 
         // The Filter module that will have it's CRTSFilter::write() called
         // next.  Set to 0 if this is none.

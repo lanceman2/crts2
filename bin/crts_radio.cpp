@@ -11,6 +11,7 @@
 #include <signal.h>
 #include <pthread.h>
 #include <inttypes.h>
+#include <time.h>
 #include <map>
 #include <list>
 #include <vector>
@@ -60,9 +61,68 @@ Stream::Stream(void): map(*this),
 Stream::~Stream(void)
 {
     DSPEW();
-    
+
+    bool threadRunning = true;
+
+    while(threadRunning)
+    {
+        threadRunning = false;
+        // First we wait for threads to finish running.
+        for(auto threadGroup: threadGroups)
+        {
+            DASSERT(threadGroup, "");
+            MUTEX_LOCK(&threadGroup->mutex);
+
+            if(threadGroup->filterModule)
+            {
+                // this thread is running or about to run.
+                threadRunning = true;
+                MUTEX_UNLOCK(&threadGroup->mutex);
+                break;
+            }
+
+            MUTEX_UNLOCK(&threadGroup->mutex);
+        }
+        // TODO: sleep is a little kludgey.  We should get a signal
+        // from the last thread instead.
+        if(threadRunning)
+        {
+            const struct timespec ts =
+            {
+                0/*seconds*/, 10000/*nanoseconds*/
+            };
+
+            //DSPEW("waiting to threads to finish");
+            nanosleep(&ts, 0);
+        }
+    }
+
+
+    for(auto threadGroup: threadGroups)
+    {
+        DASSERT(threadGroup, "");
+        delete threadGroup;
+    }
+    threadGroups.clear();
+
+    // delete the filter modules and remove them from the list (map).
+    for(auto it: map)
+    {
+        DASSERT(it.second, "");
+        // Call the module destroyer that runs in whatever magical shared
+        // object namespace without exposing the rest of the application
+        // to the symbols in the module.  Just using "delete filter" can
+        // cause major problems because of this state of affairs, and
+        // worst yet it could work most of the time, only to fail
+        // sometimes.
+        it.second->destroyFilter(it.second->filter);
+    }
+
+
+    // free up sources list memory
     sources.clear();
 
+    // Remove this from the streams list
     streams.remove(this);
 
     DSPEW("now there are %d Streams", streams.size());
@@ -175,8 +235,8 @@ bool Stream::connect(uint32_t from, uint32_t to)
     haveConnections = true;
 
 
-    DSPEW("Connected filter % " PRIu32 "(%s) writes to %" PRIu32 "(%s)",
-            from, f->name.c_str(), to, t->name.c_str());
+    DSPEW("Connected filter %s writes to %s",
+            f->name.c_str(), t->name.c_str());
 
 
 
@@ -643,7 +703,7 @@ static int parseArgs(int argc, const char **argv)
 
             ThreadGroup *threadGroup = 0;
 
-             while(i < argc)
+             while(i < argc && argv[i][0] >= '0' && argv[i][0] <= '9')
              {
                 // the follow args are like:  0 1 2 ...
                 uint32_t fi; // filter index.
@@ -659,10 +719,24 @@ static int parseArgs(int argc, const char **argv)
                     return usage(argv[0], argv[i-1]);
                 }
                 FilterModule *filterModule = it->second;
+
                 DASSERT(filterModule, "");
+                DASSERT(!filterModule->threadGroup,
+                        "filter module \"%s\" already has a thread",
+                        filterModule->name.c_str());
+
+                if(filterModule->threadGroup)
+                {
+                    ERROR("filter module \"%s\" already has a thread",
+                        filterModule->name.c_str());
+                    return 1; // Failure
+                }
 
                 if(!threadGroup)
+                {
                     threadGroup = new ThreadGroup(stream);
+                    stream->threadGroups.push_back(threadGroup);
+                }
 
                 // This filterModule is a member of this group.
                 filterModule->threadGroup = threadGroup;
@@ -680,6 +754,7 @@ static int parseArgs(int argc, const char **argv)
 
             // TODO: check the order of the filters in the threadGroup
             // and make sure that it can work in that order...
+            continue;
         }
 
 
@@ -780,6 +855,30 @@ static int parseArgs(int argc, const char **argv)
         setDefaultStreamConnections(stream);
     }
 
+    for(auto st : Stream::streams)
+    {
+        // If there are threads make sure that all filter modules are part
+        // of a thread group, for each stream.  We add a threadGroup to a
+        // stream only if we need one to but filter modules in that did
+        // not have a thread group otherwise.
+        if(st->threadGroups.size() > 0)
+        {
+            ThreadGroup *threadGroup = 0;
+
+            for(auto it : st->map)
+            {
+                if(!it.second->threadGroup)
+                {
+                    if(!threadGroup)
+                    {
+                        threadGroup = new ThreadGroup(st);
+                        st->threadGroups.push_back(threadGroup);
+                    }
+                    it.second->threadGroup = threadGroup;
+                }
+            }
+        }
+    }
 
     // TODO: parse command line to change modules list, module arguments and
     // module connectivity.
@@ -844,8 +943,14 @@ int main(int argc, const char **argv)
     // TODO: Check that connections in the stream make sense ???
     ///////////////////////////////////////////////////////////////////
 
+    // Figure out which filter modules have no writers, i.e. are sources.
     for(auto stream : Stream::streams)
         stream->getSources();
+
+    // Start the threads if there are any.
+    for(auto stream : Stream::streams)
+        for(auto threadGroup : stream->threadGroups)
+            threadGroup->run();
 
     bool isRunning = true;
 
@@ -858,7 +963,29 @@ int main(int argc, const char **argv)
     /* NOTE: THIS IS VERY IMPORTANT
      *
 
-  Here's the general sequence/stack of filter "write" calls:
+  Without threads FilterModule::write() is the start of a long repeating
+  stack of write calls.  If there is a threaded filter to write to
+  FilterModule::write() will set that threads data and than signal that
+  thread to call CRTSFilter::write(), else if there is no different thread
+  FilterModule::write() will call CRTSFilter::write() directly.
+
+  CRTSFilter::write() will call any number of CRTSFilter::writePush()
+  calls which in turn call FilterModule::write().  The
+  CRTSFilter::writePush() function is nothing more than a wrapper of
+  FilterModule::write() calls, so one could say CRTSFilter::write() calls
+  any number of FilterModule::write() calls.  In the software
+  stack/flow/architecture we can consider the CRTSFilter::writePush()
+  calls as part of the CRTSFilter::write() calls generating
+  FilterModule::write() calls.
+
+
+  The general sequence/stack of filter "write" calls will vary based on
+  the partitioning of the threads from the command line.  For example with
+  no threads, and assuming that all the filters "get there fill of data",
+  the write call stack will traverse the directed graph that is the
+  filter stream, growing until it reaches sink filters and than popping
+  back to the branch CRTSFilter::write() to grow to the next sink filter.
+  In this way each CRTSFilter::write() may be a branch point.
 
 
   filter           function
@@ -866,25 +993,18 @@ int main(int argc, const char **argv)
 
     0        FilterModule::write()
 
-    0            CRTSFilter::write() or just signal thread that calls this.
+    0            CRTSFilter::write()
 
-    0                n X CRTSFilter::writePush()  (0 <= n <= numConnections)
+    1                FilterModule::write()
 
-    1                    FilterModule::write()
+    1                        CRTSFilter::write()
 
-    1                        CRTSFilter::write() or just signal thread that ...
-
-
-    ......... it keeps growing until ...
+    .                            .......
 
 
-    and filter 1 will add a similar stack of calls and the write
-    call stack grows until some FilterModule::write() triggers a call
-    to CRTSFilter::write() "in another thread" or they get to a SINK
-    CRTSFilter which does not call CRTSFilter::writePush().
+  With threads each thread will have a stack like this which grows until it
+  hits another thread in a CRTSFilter::write() call or it hits a sink filter.
 
-    The "in another thread" is the magic here.  The modules need not know
-    that they are running in different threads.
 
      */
 
@@ -896,7 +1016,7 @@ int main(int argc, const char **argv)
                 for(auto source : stream->sources)
                 {
                     // Run this source filterModule:
-                    source->write(0,0,0);
+                    source->write(0,0,0, true);
 
                     // Something ran so keep it running
                     isRunning = true;

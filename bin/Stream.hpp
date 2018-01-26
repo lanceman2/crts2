@@ -1,3 +1,5 @@
+class ThreadGroup;
+
 // A factory of FilterModule class objects.
 // We keep a list (map) in Stream.
 //
@@ -14,6 +16,9 @@ class Stream : public std::map<uint32_t, FilterModule*>
         // of all the sources for this stream.
         std::list<FilterModule*> sources;
 
+        // This is just a handy reference to the base class map,
+        // so it is the correct class type to access the std:map
+        // methods.  It makes some of the code less ugly.
         std::map<uint32_t, FilterModule*> &map;
 
         void getSources(void);
@@ -56,7 +61,7 @@ class Stream : public std::map<uint32_t, FilterModule*>
 
 
         // A list of threads that run a list of filter modules.
-        std::map<ThreadGroup *,ThreadGroup *> threadGroups;
+        std::list<ThreadGroup *> threadGroups;
 
 
     private:

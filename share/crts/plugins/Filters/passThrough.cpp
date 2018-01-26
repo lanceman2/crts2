@@ -3,13 +3,16 @@
 #include "crts/debug.h"
 #include "crts/Filter.hpp"
 
+#define DBDELETE
 
 class PassThrough : public CRTSFilter
 {
     public:
 
         PassThrough(int argc, const char **argv);
-
+#ifdef DBDELETE
+        ~PassThrough(void);
+#endif
         ssize_t write(void *buffer, size_t bufferLen,
                 uint32_t channelNum);
 };
@@ -30,6 +33,14 @@ ssize_t PassThrough::write(void *buffer, size_t len, uint32_t channelNum)
     return len;
 }
 
+
+#ifdef DBDELETE
+PassThrough::~PassThrough(void)
+{
+    DSPEW();
+}
+#endif
+ 
 
 // Define the module loader stuff to make one of these class objects.
 CRTSFILTER_MAKE_MODULE(PassThrough)
