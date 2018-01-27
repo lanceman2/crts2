@@ -241,8 +241,9 @@ static void *filterThreadWrite(ThreadGroup *threadGroup)
 
 #ifdef DEBUG
         if(!isRunning)
-            DSPEW("threadGroup->filterModule \"%s\""
+            DSPEW("stream->isRunning=%s threadGroup->filterModule \"%s\""
                     " finishing last write cycle",
+                    isRunning?"true":"false",
                     filterModule->name.c_str());
 #endif
 
@@ -255,8 +256,9 @@ static void *filterThreadWrite(ThreadGroup *threadGroup)
 
 #ifdef DEBUG
         if(!isRunning)
-            DSPEW("threadGroup->filterModule \"%s\""
+            DSPEW("stream->isRunning=%s threadGroup->filterModule \"%s\""
                     " finished last write cycle",
+                    isRunning?"true":"false",
                     filterModule->name.c_str());
 #endif
 
@@ -334,10 +336,12 @@ ThreadGroup::~ThreadGroup()
     // TODO: until we make threads more dynamic.
     DASSERT(!stream.isRunning, "");
 
+    DSPEW("waiting for thread %" PRIu32 " to join", threadNum);
+
     ASSERT((errno = pthread_join(thread, 0/*void **retval */) == 0), "");
 
     // remove this object from the list.    
-    DSPEW("thread joined");
+    DSPEW("thread %" PRIu32 " joined", threadNum);
 }
 
 

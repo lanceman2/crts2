@@ -76,9 +76,16 @@ Stream::~Stream(void)
             if(threadGroup->filterModule)
             {
                 // this thread is running or about to run.
+                DSPEW("waiting for thread % " PRIu32 
+                        " filter \"%s\" to return",
+                        threadGroup->threadNum,
+                        threadGroup->filterModule->name.c_str());
                 threadRunning = true;
                 MUTEX_UNLOCK(&threadGroup->mutex);
+#ifndef DEBUG
+                // Check them all if in debug mode
                 break;
+#endif
             }
 
             MUTEX_UNLOCK(&threadGroup->mutex);
@@ -89,7 +96,7 @@ Stream::~Stream(void)
         {
             const struct timespec ts =
             {
-                0/*seconds*/, 10000/*nanoseconds*/
+                1/*seconds*/, 100000/*nanoseconds*/
             };
 
             //DSPEW("waiting to threads to finish");
@@ -139,7 +146,6 @@ void Stream::destroyStreams(void)
     DSPEW("streams.size()=%d", streams.size());
 }
     
-
 
 
 // Return false on success.
@@ -642,27 +648,6 @@ static int parseArgs(int argc, const char **argv)
     // Current stream as a pointer.  There are none yet.
     Stream *stream = 0;
 
-    class ConnectionPair // just two integers in a pair
-    {
-        public:
-            inline ConnectionPair(uint32_t from_, uint32_t to_):
-                    from(from_), to(to_)
-            { 
-                DSPEW("%" PRIu32 ",%" PRIu32, from, to);
-            };
-            // Cool, looks like the copy constructor is automatic.
-
-#if 1 // debugging
-            // Checking that memory is cleaned up.
-            inline ~ConnectionPair(void)
-            {
-                DSPEW("%" PRIu32 ",%" PRIu32, from, to);
-            };
-#endif
-            uint32_t from, to; // filter index pair starting with 0
-    };
-
-
     int i = 1;
     if(i >= argc)
         return usage(argv[0]);
@@ -685,7 +670,9 @@ static int parseArgs(int argc, const char **argv)
             DSPEW("got optional arg filter:  %s", str.c_str());
 
             // Add the filter to the current stream in the command-line.
-            stream->load(str.c_str(), Argc, Argv);
+            if(stream->load(str.c_str(), Argc, Argv))
+                return 1;
+
             continue;
         }
 
@@ -929,15 +916,18 @@ int main(int argc, const char **argv)
     }
 #endif
 
-    // TODO: For now we get one stream for free without --stream on the
-    // command-line.  Each --stream arg on the command-line will make a
-    // new Stream for all following args until the next --stream which
-    // makes another.  It will have to be dynamically allocated because
-    // we will not know how many "Streams" there will be until we parse
-    // the command line.
 
     if(parseArgs(argc, argv))
-        return 1; // failure
+    {
+        // We failed so cleanup
+        //
+        // There should be not much go'n yet just filter modules
+        // loaded.  We just need to call their factory destructor's.
+
+        Stream::destroyStreams();
+
+        return 1; // return failure status
+    }
 
     ///////////////////////////////////////////////////////////////////
     // TODO: Check that connections in the stream make sense ???
@@ -952,7 +942,8 @@ int main(int argc, const char **argv)
         for(auto threadGroup : stream->threadGroups)
             threadGroup->run();
 
-    bool isRunning = true;
+
+    bool isRunning = true; // local loop running flag
 
     while(isRunning)
     {
