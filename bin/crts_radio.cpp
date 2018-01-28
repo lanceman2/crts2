@@ -99,18 +99,17 @@ Stream::~Stream(void)
                 1/*seconds*/, 100000/*nanoseconds*/
             };
 
-            //DSPEW("waiting to threads to finish");
+            DSPEW("waiting to threads to finish");
             nanosleep(&ts, 0);
         }
     }
 
-
-    for(auto threadGroup: threadGroups)
-    {
-        DASSERT(threadGroup, "");
-        delete threadGroup;
-    }
-    threadGroups.clear();
+    // The threadGroup destructor removes itself from the
+    // threadGroups list.
+    for(auto tt = threadGroups.begin();
+            tt != threadGroups.end();
+            tt = threadGroups.begin())
+        delete (*tt);
 
     // delete the filter modules and remove them from the list (map).
     for(auto it: map)
@@ -720,10 +719,7 @@ static int parseArgs(int argc, const char **argv)
                 }
 
                 if(!threadGroup)
-                {
                     threadGroup = new ThreadGroup(stream);
-                    stream->threadGroups.push_back(threadGroup);
-                }
 
                 // This filterModule is a member of this group.
                 filterModule->threadGroup = threadGroup;
@@ -850,18 +846,16 @@ static int parseArgs(int argc, const char **argv)
         // not have a thread group otherwise.
         if(st->threadGroups.size() > 0)
         {
-            ThreadGroup *threadGroup = 0;
+            ThreadGroup *newThreadGroup = 0;
 
             for(auto it : st->map)
             {
+                // it.second is a Stream
                 if(!it.second->threadGroup)
                 {
-                    if(!threadGroup)
-                    {
-                        threadGroup = new ThreadGroup(st);
-                        st->threadGroups.push_back(threadGroup);
-                    }
-                    it.second->threadGroup = threadGroup;
+                    if(!newThreadGroup)
+                        newThreadGroup = new ThreadGroup(st);
+                    it.second->threadGroup = newThreadGroup;
                 }
             }
         }

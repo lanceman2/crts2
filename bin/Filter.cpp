@@ -168,7 +168,7 @@ static void freeBuffer(struct Header *h)
     memset(h, 0, h->len);
 #endif
 
-    WARN("freeing buffer=%p", h);
+    //WARN("freeing buffer=%p", h);
 
     free(h);
 }
@@ -194,8 +194,6 @@ static void *filterThreadWrite(ThreadGroup *threadGroup)
     DASSERT(mutex, "");
     DASSERT(cond, "");
 
-    std::atomic<bool> &isRunning = threadGroup->stream.isRunning;
-
     FilterModule *filterModule;
 
 
@@ -209,7 +207,7 @@ static void *filterThreadWrite(ThreadGroup *threadGroup)
     MUTEX_LOCK(mutex);
 
 
-    while(isRunning)
+    while(true)
     {
         if(!threadGroup->filterModule)
             // Here we will loose the mutex lock and block waiting for a
@@ -224,11 +222,13 @@ static void *filterThreadWrite(ThreadGroup *threadGroup)
         //    overcomes the first loop startup race condition, without the
         //    use of a barrier or something like that.
 
-
         // Now we have the mutex lock.
+        
+        if(!threadGroup->filterModule)
+            // We are done.
+            break;
 
         // The filter module and what is written will change in each loop.
-        DASSERT(threadGroup->filterModule, "");
         DASSERT(threadGroup->filterModule->filter, "");
         filterModule = threadGroup->filterModule;
 
@@ -239,32 +239,22 @@ static void *filterThreadWrite(ThreadGroup *threadGroup)
         DASSERT(!filterModule->writers || (threadGroup->buffer &&
                 BUFFER_HEADER(threadGroup->buffer)->magic == MAGIC), "");
 
-#ifdef DEBUG
-        if(!isRunning)
-            DSPEW("stream->isRunning=%s threadGroup->filterModule \"%s\""
-                    " finishing last write cycle",
-                    isRunning?"true":"false",
-                    filterModule->name.c_str());
-#endif
 
         filterModule->filter->write(
                 threadGroup->buffer,
                 threadGroup->len,
                 threadGroup->channelNum);
 
+        // Remove/free any buffers that the filterModule->filter->write()
+        // created.
         filterModule->removeUnusedBuffers();
-
-#ifdef DEBUG
-        if(!isRunning)
-            DSPEW("stream->isRunning=%s threadGroup->filterModule \"%s\""
-                    " finished last write cycle",
-                    isRunning?"true":"false",
-                    filterModule->name.c_str());
-#endif
 
         if(threadGroup->buffer)
         {
-            // useCount is atomic so ya!
+            // Remove any buffers that the above
+            // filterModule->filter->write() did not create and this
+            // threads above filterModule->filter->write() just happens to
+            // be the last user of.
             struct Header *h = BUFFER_HEADER(threadGroup->buffer);
 
             if(h->useCount.fetch_sub(1) == 1)
@@ -292,7 +282,7 @@ static void *filterThreadWrite(ThreadGroup *threadGroup)
 
 void ThreadGroup::run(void)
 {
-    DSPEW("Creating writer thread");
+    //DSPEW("ThreadGroup %" PRIu32 " creating pthread", threadNum);
 
     filterModule = 0;
 
@@ -322,8 +312,8 @@ ThreadGroup::ThreadGroup(Stream *stream_in):
     DASSERT(stream_in, "");
     // and it better be in a running mode.
     DASSERT(stream.isRunning, "");
-
-    DSPEW();
+    stream.threadGroups.push_back(this);
+    DSPEW("threadGroup %" PRIu32, threadNum);
 }
 
 
@@ -336,12 +326,17 @@ ThreadGroup::~ThreadGroup()
     // TODO: until we make threads more dynamic.
     DASSERT(!stream.isRunning, "");
 
+    MUTEX_LOCK(&mutex);
+    ASSERT((errno = pthread_cond_signal(&cond)) == 0, "");
+    MUTEX_UNLOCK(&mutex);
+    
     DSPEW("waiting for thread %" PRIu32 " to join", threadNum);
 
     ASSERT((errno = pthread_join(thread, 0/*void **retval */) == 0), "");
 
     // remove this object from the list.    
-    DSPEW("thread %" PRIu32 " joined", threadNum);
+    DSPEW("ThreadGroup thread %" PRIu32 " joined", threadNum);
+    stream.threadGroups.remove(this);
 }
 
 
@@ -426,6 +421,11 @@ void *CRTSFilter::getBuffer(size_t bufferLen)
 #endif
     buf->header.len = bufferLen;
     buf->header.useCount = 1;
+    // The buffer in this list will be popped at the end of the
+    // FilterModule::write() call.  It will be freed if it is not passed
+    // to another FilterModule::write() from within modules
+    // CRTSFilter::write() call; otherwise if is freed in the last
+    // FilterModule::write() in a stack of FilterModule::write() calls.
     this->filterModule->buffers.push(buf);
 
     return BUFFER_PTR(buf);
@@ -434,7 +434,14 @@ void *CRTSFilter::getBuffer(size_t bufferLen)
 
 void CRTSFilter::releaseBuffer(void *buffer)
 {
-    // TODO: WRITE THIS FUNCTION
+    // This could be a useful for decrementing the useCount of a buffer in
+    // the CRTSFilter::write() call to alleviate buffer access contention.
+    // If this is not called the buffer useCount is automatically
+    // decremented in FilterModule::write() that called the
+    // CRTSFilter::write();
+    //
+    // TODO: WRITE THIS FUNCTION  This may require adding move meta variables
+    // to the buffer.
 
 }
 
@@ -482,6 +489,13 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
 
         if(threadGroup->hasReturned)
         {
+            DASSERT(!threadGroup->stream.isRunning, "");
+            // This just handles the exit race, the main thread just did
+            // not read the stream isRunning flag before another thread
+            // set it (in CRTFFiler::write()) after it looked.  No
+            // problem, we handle that case here.
+            DSPEW("Exit race case: thread %" PRIu32 " has returned but we have a "
+                    "FilterModule::write() to it", threadGroup->threadNum);
             if(h && h->useCount.fetch_sub(1) == 1)
                 // if the value of useCount was 1 than it has gone to 0
                 // now.
@@ -489,7 +503,7 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
             MUTEX_UNLOCK(&threadGroup->mutex);
             return;
         }
-
+      
         threadGroup->filterModule = this;
         threadGroup->buffer = buffer;
         threadGroup->len = len;
