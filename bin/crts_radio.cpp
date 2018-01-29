@@ -80,6 +80,15 @@ Stream::~Stream(void)
                         " filter \"%s\" to return",
                         threadGroup->threadNum,
                         threadGroup->filterModule->name.c_str());
+                if(threadGroup->threadWaiting)
+                    // signal the thread that is waiting now.
+                    // The flag threadGroup->threadWaiting and the mutex guarantee
+                    // that the thread is waiting now.
+                    ASSERT((errno = pthread_cond_signal(&threadGroup->cond))
+                            == 0, "");
+                    // The thread will wake up only after we release the threads
+                    // mutex lock down below here.
+
                 threadRunning = true;
                 MUTEX_UNLOCK(&threadGroup->mutex);
 #ifndef DEBUG
@@ -109,7 +118,7 @@ Stream::~Stream(void)
     for(auto tt = threadGroups.begin();
             tt != threadGroups.end();
             tt = threadGroups.begin())
-        delete (*tt);
+        delete *tt;
 
     // delete the filter modules and remove them from the list (map).
     for(auto it: map)
@@ -134,17 +143,13 @@ Stream::~Stream(void)
     DSPEW("now there are %d Streams", streams.size());
 }
 
+
 void Stream::destroyStreams(void)
 {
-    DSPEW("streams.size()=%d", streams.size());
-
     auto it = streams.begin();
     for(;it != streams.end(); it = streams.begin())
         delete (*it);
-
-    DSPEW("streams.size()=%d", streams.size());
 }
-    
 
 
 // Return false on success.
@@ -459,11 +464,11 @@ bool Stream::printGraph(const char *filename)
             fclose(f);
 
             int status = 0;
-            NOTICE("waiting for child display process", status);
+            INFO("waiting for child display process", status);
             errno = 0;
             // We wait for just this child.
             if(pid == waitpid(pid, &status, 0))
-                NOTICE("child display process return status %d", status);
+                INFO("child display process return status %d", status);
             else
                 WARN("child display process gave a wait error");
         }
@@ -931,11 +936,28 @@ int main(int argc, const char **argv)
     for(auto stream : Stream::streams)
         stream->getSources();
 
-    // Start the threads if there are any.
-    for(auto stream : Stream::streams)
-        for(auto threadGroup : stream->threadGroups)
-            threadGroup->run();
 
+    if(ThreadGroup::createCount)
+    {
+        // We just use this barrier once at the starting of the threads,
+        // so we use this stack memory to create and use it.
+        pthread_barrier_t barrier;
+        ThreadGroup::barrier = &barrier;
+        DSPEW("have %" PRIu32 " threads", ThreadGroup::createCount);
+        ASSERT((errno = pthread_barrier_init(&barrier, 0,
+                    ThreadGroup::createCount + 1)) == 0, "");
+
+        // Start the threads.
+        for(auto stream : Stream::streams)
+            for(auto threadGroup : stream->threadGroups)
+                threadGroup->run();
+
+        BARRIER_WAIT(&barrier);
+        ASSERT((errno = pthread_barrier_destroy(&barrier)) == 0, "");
+    }
+
+    // Now all the thread in all stream are running past there barriers,
+    // so they are initialized and ready to loop.
 
     bool isRunning = true; // local loop running flag
 
@@ -992,6 +1014,8 @@ int main(int argc, const char **argv)
 
 
      */
+
+ 
 
         isRunning = false;
         for(auto stream : Stream::streams)

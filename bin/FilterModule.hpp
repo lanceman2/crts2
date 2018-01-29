@@ -162,6 +162,7 @@ class ThreadGroup
         static uint32_t createCount;
 
         static pthread_t mainThread;
+        static pthread_barrier_t *barrier;
 
         // stream is the fixed/associated Stream which contains
         // any filter modules that may be involved.
@@ -172,8 +173,41 @@ class ThreadGroup
 
         /////////////////////////////////////////////////////////////
         //       All ThreadGroup data below here is changing data.
-        //       We must have the mutex just above to access it.
+        //       We must have the mutex just above to access these:
         /////////////////////////////////////////////////////////////
+
+        // These may be setup by another thread that is feeding data to
+        // this thread via Filtermodule::write(), the memory of these
+        // are in the Filtermodule::write() stack.  We use them to
+        // pop the write queue.
+        //
+        pthread_mutex_t *queueMutex;
+        pthread_cond_t *queueCond;
+
+
+        // We have two cases, blocks of code, when this thread is not
+        // holding the mutex lock:
+        //
+        //       1) in the block that calls CRTSFilter::write()
+        //
+        //       2) in the pthread_cond_wait() call
+        //
+        // We need this flag so we know which block of code the thread is
+        // in from the main thread, otherwise we'll call
+        // pthread_cond_signal() when it is not necessary.
+        //
+        //
+        // TODO: Does calling pthread_cond_signal() when there are no
+        // listeners make a mode switch, or use much system resources?
+        // I would think checking a flag uses less resources than
+        // calling pthread_cond_signal() when there is no listener.
+        // It adds a function call or two to the stack and that must be
+        // more work than checking a flag.  If it adds a mode switch than
+        // this flags adds huge resource savings.
+        //
+        bool threadWaiting; // thread calling pthread_cond_wait()
+
+
 
         bool hasReturned; // the thread returned from its callback
 

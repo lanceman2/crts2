@@ -187,35 +187,57 @@ static void *filterThreadWrite(ThreadGroup *threadGroup)
 {
     DASSERT(threadGroup, "");
 
-    // Put some pointers on the stack.
+    // Put some constant pointers on the stack.
     pthread_mutex_t* mutex = &(threadGroup->mutex);
     pthread_cond_t* cond = &(threadGroup->cond);
 
     DASSERT(mutex, "");
     DASSERT(cond, "");
 
+
+    // These variables will change at every loop:
     FilterModule *filterModule;
+    void *buffer;
+    size_t len;
+    uint32_t channelNum;
 
 
-    DSPEW("thread %" PRIu32 " starting", threadGroup->threadNum);
-
- 
     // mutex limits access to all the data in ThreadGroup starting at
     // ThreadGroup::filterModule in the class declaration, which can
     // and will be changed between loops.
     //
     MUTEX_LOCK(mutex);
+    DSPEW("thread %" PRIu32 " starting", threadGroup->threadNum);
 
+
+    // Now that we have the threads mutex lock we can wait for all
+    // the threads and the main thread to be in an "initialized" state.
+    //
+    // This BARRIER stops the main thread from queuing up thread read
+    // events before we have the threads ready to receive them via
+    // the pointer, threadGroup->filterModule.
+    BARRIER_WAIT(threadGroup->barrier);
+
+    // We can't have a request yet, while we hold the lock.
+    DASSERT(!threadGroup->filterModule, "");
 
     while(true)
     {
         if(!threadGroup->filterModule)
+        {
+            threadGroup->threadWaiting = true;
             // Here we will loose the mutex lock and block waiting for a
             // conditional signal.
             //
             // WAITING FOR SIGNAL HERE
             ASSERT((errno = pthread_cond_wait(cond, mutex)) == 0, "");
             // Now we have the mutex lock again.
+            //
+            // By the time another thread (or this thread) gets this
+            // threads mutex lock again this thread will be calling
+            // the CTRSFilter::write().
+            threadGroup->threadWaiting = false;
+        }
         // else
         //    had a filterModule already set before we first got the lock
         //    so we will skip waiting for the signal.  This if/else
@@ -223,12 +245,12 @@ static void *filterThreadWrite(ThreadGroup *threadGroup)
         //    use of a barrier or something like that.
 
         // Now we have the mutex lock.
-        
+
         if(!threadGroup->filterModule)
-            // We are done.
+            // There is no request so this is just a signal to return.
             break;
 
-        // The filter module and what is written will change in each loop.
+        // The filter module and what is written may change in each loop.
         DASSERT(threadGroup->filterModule->filter, "");
         filterModule = threadGroup->filterModule;
 
@@ -239,32 +261,65 @@ static void *filterThreadWrite(ThreadGroup *threadGroup)
         DASSERT(!filterModule->writers || (threadGroup->buffer &&
                 BUFFER_HEADER(threadGroup->buffer)->magic == MAGIC), "");
 
+        // Receive the orders for this thread.  We need to set local
+        // stack variables with the values for this write() request.
+        buffer = threadGroup->buffer;
+        len = threadGroup->len;
+        channelNum = threadGroup->channelNum;
 
-        filterModule->filter->write(
-                threadGroup->buffer,
-                threadGroup->len,
-                threadGroup->channelNum);
+        // If another thread wants to know, they can look at this pointer to
+        // see this thread is doing its next writes, and we mark that we
+        // are ready to queue up the next request if we continue to loop.
+        threadGroup->filterModule = 0;
+
+
+        MUTEX_UNLOCK(mutex);
+
+        // While this thread it carrying out its' orders new orders
+        // may be set, queued up, by another thread.
+        //
+        // This may be a time consuming call.
+
+        filterModule->filter->write(buffer, len, channelNum);
+
+
+        MUTEX_LOCK(mutex);
+
+        if(threadGroup->queueMutex)
+        {
+            DASSERT(threadGroup->queueCond, "");
+
+            MUTEX_LOCK(threadGroup->queueMutex);
+
+            // We have one in the "queue" from FilterModule::write().
+            // There should be a thread waiting, because of this
+            // "queuing".
+            ASSERT((errno = pthread_cond_signal(
+                            threadGroup->queueCond)) == 0, "");
+
+            MUTEX_UNLOCK(threadGroup->queueMutex);
+
+            // And some time later the thread we just signaled will
+            // setup for the next CRTSFilter::write() call
+            // buffer, len, and channelNum.
+        }
 
         // Remove/free any buffers that the filterModule->filter->write()
-        // created.
+        // created that have not been passed to another write() call, or
+        // are no longer on a thread write() stack.
         filterModule->removeUnusedBuffers();
 
-        if(threadGroup->buffer)
+        if(buffer)
         {
             // Remove any buffers that the above
             // filterModule->filter->write() did not create and this
             // threads above filterModule->filter->write() just happens to
             // be the last user of.
-            struct Header *h = BUFFER_HEADER(threadGroup->buffer);
+            struct Header *h = BUFFER_HEADER(buffer);
 
             if(h->useCount.fetch_sub(1) == 1)
                 freeBuffer(h);
         }
-
-        // If something wants to know, they can look at this pointer to
-        // see this thread is done with it's writes, and we mark that we
-        // are ready to wait for the next signal if we continue to loop.
-        threadGroup->filterModule = 0;
     }
 
     // Let the other threads know that we are done running this thread.
@@ -295,6 +350,7 @@ void ThreadGroup::run(void)
 
 uint32_t ThreadGroup::createCount = 0;
 pthread_t ThreadGroup::mainThread = pthread_self();
+pthread_barrier_t *ThreadGroup::barrier = 0;
 
 
 // We should have a write lock on the stream to call this.
@@ -450,6 +506,10 @@ void CRTSFilter::releaseBuffer(void *buffer)
 // The buffer used here must be from this 
 // This checks the buffers and calls the underlying filter writers
 // CRTSFilter::write()
+//
+// CAUTION: This code is super tricky.  If do not understand
+// multi-threaded code, go home.
+//
 void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
         bool toDifferentThread)
 {
@@ -474,7 +534,9 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
     }
 
 
-    if(threadGroup && toDifferentThread)
+    DASSERT((toDifferentThread && threadGroup) || !threadGroup, "");
+
+    if(toDifferentThread)
     {
         // We need to increment the buffer useCount for the thread here
         if(h)
@@ -484,6 +546,10 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
             // we will signal to run and that thread will release
             // this by decrementing the useCount when it is done.
         }
+
+        // This is an interesting point in the simulation.  This is where
+        // this thread may be blocked waiting of the thread of the "next
+        // filter" to finish.
 
         MUTEX_LOCK(&threadGroup->mutex);
 
@@ -503,18 +569,90 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
             MUTEX_UNLOCK(&threadGroup->mutex);
             return;
         }
-      
+
+
+        if(threadGroup->threadWaiting)
+            // signal the thread that is waiting now.
+            // The flag threadGroup->threadWaiting and the mutex guarantee
+            // that the thread is waiting now.
+            ASSERT((errno = pthread_cond_signal(&threadGroup->cond))
+                    == 0, "");
+            // The thread will wake up only after we release the threads
+            // mutex lock down below here.
+        
+        // If (threadGroup->filterModule) then we have a request already
+        // and we must wait for the thread to signal us, and then set this
+        // request.  This in effect gives us a "write" queue size of
+        // one, making us block when the queue is "full".  This will allow
+        // two "adjacent" CRTSFilter write threads to run at the same time.
+        //
+        // Ya, seamless parallel processing: the parallelization happens
+        // from the program runners option, not the from CRTSFilter
+        // modules code.
+        //
+        if(threadGroup->filterModule)
+        {
+            pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+            pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+
+            // This signal wait call is very important.  Without it we
+            // could end up having a fast CRTSFilter overrunning its
+            // slower adjacent CRTSFilter.
+            //
+            // Note: we have two interlocking mutexes.
+
+            MUTEX_LOCK(&mutex);
+
+            // Let the threadGroup thread know about these:
+            threadGroup->queueMutex = &mutex;
+            threadGroup->queueCond = &cond;
+
+            MUTEX_UNLOCK(&threadGroup->mutex);
+
+            // From the threadGroup->threadWaiting the state of the
+            // threadGroup thread is guaranteed to become running
+            // in the 
+
+            // We release the mutex lock and wait:
+            ASSERT((errno = pthread_cond_wait(&cond, &mutex)) == 0, "");
+            // Now we have the mutex lock again.
+
+            MUTEX_LOCK(&threadGroup->mutex);
+
+            MUTEX_UNLOCK(&mutex);
+
+            // There may be kernel/system resources associated with
+            // these, so we destroy them.
+            ASSERT((errno = pthread_mutex_destroy(&mutex)) == 0, "");
+            ASSERT((errno = pthread_cond_destroy(&cond)) == 0, "");
+
+            // Mark that there is nothing in the threadGroup queue
+            threadGroup->queueMutex = 0;
+#ifdef DEBUG
+            // The logic does not require that this be reset to zero
+            // but resetting it will help check/catch an assertion.
+            threadGroup->queueCond = 0;
+#endif
+        }
+
+        DASSERT(!threadGroup->filterModule, "");
+
         threadGroup->filterModule = this;
         threadGroup->buffer = buffer;
         threadGroup->len = len;
         threadGroup->channelNum = channelNum;
-        ASSERT((errno = pthread_cond_signal(&threadGroup->cond)) == 0, "");
+
         MUTEX_UNLOCK(&threadGroup->mutex);
-        // the thread will decrement the use count at the end of
-        // it's cycle.
+        // The thread threadGroup will decrement the buffer use count at
+        // the end of it's cycle.
     }
     else
     {
+        // This is being called from a stack of more than one
+        // CRTSFilter::write() calls so there is no need to get a mutex
+        // lock, the current thread stack keeps CRTSFilter::write()
+        // function calls in a sequence.
+        //
         // The CRTSFilter::write() call can generate more
         // FilterModule::writes() via module writer interface
         // CRTSFilter::writePush().
