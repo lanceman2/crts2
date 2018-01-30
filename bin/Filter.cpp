@@ -168,6 +168,8 @@ static void freeBuffer(struct Header *h)
     memset(h, 0, h->len);
 #endif
 
+    // Making sure that buffers are cleaned up.
+    // This will spew too much to leave uncommented.
     //WARN("freeing buffer=%p", h);
 
     free(h);

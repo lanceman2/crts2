@@ -256,7 +256,7 @@ T *LoadModule(const char *path, const char *category, int argc,
     catch(...)
     {
         ERROR("Failed to load module \"%s\""
-                "an exception was thrown", path);
+                " an exception was thrown", path);
 
         if(ret && destroyer)
             destroyer(ret);

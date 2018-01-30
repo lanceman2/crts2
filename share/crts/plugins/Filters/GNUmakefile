@@ -8,6 +8,15 @@ CPPFLAGS := -I$(ROOT)include -I$(ROOT)lib -I$(ROOT)liquid-dsp/src
 INSTALL_DIR = $(PREFIX)/share/crts/plugins/$(notdir $(CURDIR))
 
 
+LIQUID_SRC := $(abspath $(CURDIR)/../liquid-dsp/src)
+LIBFEC_SRC := $(abspath $(CURDIR)/../liquid-dsp/libfec/src)
+
+SRC_RPATH := -Wl,-rpath,$(LIQUID_SRC):$(LIBFEC_SRC)
+
+LIQUID_LDFLAGS := -L$(LIQUID_SRC) -lliquid
+LIBFEC_LDFLAGS := -L$(LIBFEC_SRC) -lfec
+
+
 # Make every *.cpp file into a DSO (dynamic shared object) plugin that is
 # installed.
 
@@ -23,7 +32,21 @@ $(foreach src,$(srcs),$(eval $(call MkSource,$(src))))
 undefine MkSource
 undefine s
 
+
 readline.so_LDFLAGS := -lreadline
+
+rx.so_LDFLAGS := -luhd
+
+
+
+# TODO: make quickbuild.make do this patchelf thing:
+#
+# After we install the programs we reset the RPATH so that the programs
+# can find the installed libliquid and libfec shared libraries at run-time.
+INSTALL_RPATH = patchelf --set-rpath '$(PREFIX)/lib'
+
+POST_INSTALL_COMMAND =\
+ $(INSTALL_RPATH) $(INSTALL_DIR)/rx.so
 
 
 # above we auto generate lines like this:

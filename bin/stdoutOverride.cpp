@@ -5,12 +5,6 @@
 #include "crts/crts.h"
 #include "crts/debug.h"
 
-
-#ifdef __cplusplus
-extern "C" {
-#endif
-
-
 // This gets called before we can know whither or not we really need to do
 // this, because we cannot parse command-line options before libuhd.so is
 // loaded.
@@ -19,13 +13,19 @@ extern "C" {
 // when they are loaded, this code will not be required for crts_radio to
 // be able to use bash pipe lines, but this hack will not do anything that
 // bad.
+//
+// Since now we are loading libuhd only in plugins it will be loaded
+// after the calling of main().  That was not the case when we linked
+// with libuhd with crts_radio.
 
-// We needed to link this dynamic linked library to programs that link
+//
+// In the past: we needed to link to a dynamic linked library to programs that link
 // with libuhd.so.  We get this library to load before libuhd.so so we can
 // stop libuhd.so from doing stupid things when it is loaded.
 // Putting a constructor function in the source of the binary program did
 // not get called before the libuhd.so constructor.  We link our programs
 // so that this constructor is called before the constructor in libuhd.so.
+// The linker command line order mattered.
 /*
 
  Related discussion but not what we did here, ref:
@@ -34,15 +34,11 @@ library-to-print-to-stdout-in-linux-c
 
 
 */
-
-// crtsOut will act like stdout after startupFunction() gets called.
-FILE *crtsOut;
-
-
-static void startupFunction(void) __attribute__ ((constructor));
-static void startupFunction(void)
+static FILE *stdoutOverride(void)
 {
-    //fprintf(stderr, "%s:%d: calling %s()\n", __FILE__, __LINE__, __func__);
+    FILE *crtsOut;
+
+    fprintf(stderr, "%s:%d: calling %s()\n", __FILE__, __LINE__, __func__);
 
     // When this is called we assume that there has been no data written
     // to the stdout stream or stdout file descriptor.  We need to setup a
@@ -78,13 +74,13 @@ static void startupFunction(void)
     // We can now write to crtsOut to write to what appears as stdout in a
     // bash pipe line.
 
-#if 0 // testing crtsOut
+#if 1 // testing crtsOut
     fprintf(crtsOut, "crtsOut %s:%d: calling %s()\n", __FILE__, __LINE__, __func__);
     fflush(crtsOut);
 #endif
+
+    return crtsOut;
 }
 
-
-#ifdef __cplusplus
-}
-#endif
+// crtsOut will act like stdout after startupFunction() gets called.
+FILE *crtsOut = stdoutOverride();

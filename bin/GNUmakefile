@@ -8,14 +8,10 @@ BIN = $(PREFIX)/bin
 INSTALL_DIR = $(BIN)
 
 
-LIQUID_SRC := $(abspath $(CURDIR)/../liquid-dsp/src)
-LIBFEC_SRC := $(abspath $(CURDIR)/../liquid-dsp/libfec/src)
 LIBCRTS_SRC := $(abspath $(CURDIR)/../lib)
 
-SRC_RPATH := -Wl,-rpath,$(LIBCRTS_SRC):$(LIQUID_SRC):$(LIBFEC_SRC)
+SRC_RPATH := -Wl,-rpath,$(LIBCRTS_SRC)
 
-LIQUID_LDFLAGS := -L$(LIQUID_SRC) -lliquid
-LIBFEC_LDFLAGS := -L$(LIBFEC_SRC) -lfec
 LIBCRTS_LDFLAGS := -L$(LIBCRTS_SRC) -lcrts_radio
 
 
@@ -29,9 +25,6 @@ BUILD_NO_INSTALL := test_link mkTUN udpTunnelServer testSuidMkTUN
 # details.
 COMMON_LD :=\
  $(SRC_RPATH)\
- -luhd\
- $(LIQUID_LDFLAGS)\
- $(LIBFEC_LDFLAGS)\
  $(LIBCRTS_LDFLAGS)\
  -Wl,--export-dynamic\
  -ldl -lpthread
@@ -45,6 +38,7 @@ test_link_LDFLAGS = $(COMMON_LD)
 
 crts_radio_SOURCES :=\
  crts_radio.cpp\
+ stdoutOverride.cpp\
  get_opt.cpp\
  timer.cpp\
  Filter.cpp
