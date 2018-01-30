@@ -596,6 +596,36 @@ static void signalExitProgramCatcher(int sig)
 }
 
 
+static inline void finishThreadGroups(void)
+{
+    for(auto stream : Stream::streams)
+        //
+        // For each stream, if there are threads, we make sure that all
+        // filter modules are part of a thread group; filter modules that
+        // were not in a thread group get put in a new thread group
+        // together, for each stream.
+        //
+        if(stream->threadGroups.size() > 0)
+        {
+            ThreadGroup *newThreadGroup = 0;
+
+            for(auto it : stream->map)
+            {
+                // it.second is a Stream
+                if(!it.second->threadGroup)
+                {
+                    if(!newThreadGroup)
+                        newThreadGroup = new ThreadGroup(stream);
+                    DSPEW("filter \"%s\" added to thread " PRIu32,
+                            it.second->name.c_str(),
+                            newThreadGroup->threadNum);
+                    it.second->threadGroup = newThreadGroup;
+                }
+            }
+        }
+}
+
+
 static int setDefaultStreamConnections(Stream* &stream)
 {
     // default connections: 0 1   1 2   2 3   3 4   4 5  ...
@@ -633,6 +663,8 @@ static inline int doPrint(Stream* &stream, const char *filename = 0)
         if(setDefaultStreamConnections(stream))
             return 1; // failure
     }
+
+    finishThreadGroups();
 
     if(Stream::printGraph(filename))
         return 1; // failure
@@ -843,31 +875,7 @@ static int parseArgs(int argc, const char **argv)
         setDefaultStreamConnections(stream);
     }
 
-    for(auto st : Stream::streams)
-    {
-        // If there are threads make sure that all filter modules are part
-        // of a thread group, for each stream.  We add a threadGroup to a
-        // stream only if we need one to but filter modules in that did
-        // not have a thread group otherwise.
-        if(st->threadGroups.size() > 0)
-        {
-            ThreadGroup *newThreadGroup = 0;
-
-            for(auto it : st->map)
-            {
-                // it.second is a Stream
-                if(!it.second->threadGroup)
-                {
-                    if(!newThreadGroup)
-                        newThreadGroup = new ThreadGroup(st);
-                    it.second->threadGroup = newThreadGroup;
-                }
-            }
-        }
-    }
-
-    // TODO: parse command line to change modules list, module arguments and
-    // module connectivity.
+    finishThreadGroups();
 
     // TODO: Add checking of module connectivity, so that they make sense.
 

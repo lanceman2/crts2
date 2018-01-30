@@ -18,26 +18,49 @@ static void _vspew(FILE *stream, int errn, const char *pre, const char *file,
         int line, const char *func,
         const char *fmt, va_list ap)
 {
-    static pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
+    // We try to buffer this so that prints do not get intermixed with
+    // other prints.
+#define BUFLEN  1024
+    char buffer[BUFLEN];
+    int len;
 
-    // We stop inter thread print mixing with this a mutex.  Since this is
-    // in our debugging code we cannot do anything if pthread_mutex_lock()
-    // fails except let it crash and burn.
-    pthread_mutex_lock(&mutex);
     if(errn)
     {
         char estr[128];
         strerror_r(errn, estr, 128);
-        fprintf(stream, "%s%s:%d:pid=%u:%zu %s():errno=%d:%s: ",
+        len = snprintf(buffer, BUFLEN, "%s%s:%d:pid=%u:%zu %s():errno=%d:%s: ",
                 pre, file, line,
                 getpid(), syscall(SYS_gettid), func,
                 errn, estr);
     }
     else
-        fprintf(stream, "%s%s:%d:pid=%u:%zu %s(): ", pre, file, line,
+        len = snprintf(buffer, BUFLEN, "%s%s:%d:pid=%u:%zu %s(): ", pre, file, line,
                 getpid(), syscall(SYS_gettid), func);
-    vfprintf(stream, fmt, ap);
-    pthread_mutex_unlock(&mutex);
+
+    if(len < 10 || len > BUFLEN - 40)
+    {
+        //
+        // Try again without buffering
+        //
+        if(errn)
+        {
+            char estr[128];
+            strerror_r(errn, estr, 128);
+            fprintf(stream, "%s%s:%d:pid=%u:%zu %s():errno=%d:%s: ",
+                    pre, file, line,
+                    getpid(), syscall(SYS_gettid), func,
+                    errn, estr);
+        }
+        else
+            fprintf(stream, "%s%s:%d:pid=%u:%zu %s(): ", pre, file, line,
+                    getpid(), syscall(SYS_gettid), func);
+    
+        vsnprintf(&buffer[len], BUFLEN - len,  fmt, ap);
+        return;
+    }
+
+    vsnprintf(&buffer[len], BUFLEN - len,  fmt, ap);
+    fprintf(stream, "%s", buffer);
 }
 
 void _spew(FILE *stream, int errn, const char *pre, const char *file,

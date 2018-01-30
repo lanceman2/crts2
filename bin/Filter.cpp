@@ -534,10 +534,11 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
     }
 
 
-    DASSERT((toDifferentThread && threadGroup) || !threadGroup, "");
-
     if(toDifferentThread)
     {
+        // In this case this function is being called from a thread
+        // that is not from the threadGroup of this object.
+
         // We need to increment the buffer useCount for the thread here
         if(h)
         {
@@ -587,11 +588,12 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
         // two "adjacent" CRTSFilter write threads to run at the same time.
         //
         // Ya, seamless parallel processing: the parallelization happens
-        // from the program runners option, not the from CRTSFilter
+        // from the program runners option, not from the CRTSFilter
         // modules code.
         //
         if(threadGroup->filterModule)
         {
+            // This 
             pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
             pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 
