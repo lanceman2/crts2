@@ -87,3 +87,25 @@ cd bin
  hexdump -v"
 ```
 
+
+### readline with regular file
+
+
+```
+cd bin
+
+./termRun
+
+./termRun "\
+ ./crts_radio\
+ -f readline\
+ -f file [ xxxx ]\
+ -d"
+
+./termRun "cat xxxx |\
+ ./crts_radio\
+ -f stdin\
+ -f stdout\
+ -d"
+```
+
