@@ -375,7 +375,7 @@ static int usage(const char *argv0, const char *uopt=0)
 "   -d | --display                   display a DOT graph via dot and imagemagick\n"
 "                                    display program, before running the streams.\n"
 "                                    This option should be after filter options in\n"
-"                                    the command line.\n"
+"                                    the command line.  Maybe make it the last option.\n"
 "\n"
 "\n"
 "   -e | --exit                      exit the program.  Used if you just want to\n"
@@ -399,7 +399,7 @@ static int usage(const char *argv0, const char *uopt=0)
 "\n"
 "\n"
 "   -t | --thread LIST              run the LIST of filters in a separate thread.\n"
-"/n                                 Without this argument option the program will run\n"
+"                                   Without this argument option the program will run\n"
 "                                   all filters modules in a single thread.\n"
 "\n"
 "\n");
@@ -1033,7 +1033,7 @@ int main(int argc, const char **argv)
                 for(auto source : stream->sources)
                 {
                     // Run this source filterModule:
-                    source->write(0,0,0, true);
+                    source->write(0,0,0, source->threadGroup/*bool*/);
 
                     // Something ran so keep it running
                     isRunning = true;

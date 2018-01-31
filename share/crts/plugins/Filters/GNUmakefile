@@ -3,13 +3,13 @@
 
 ROOT := ../../../../
 
-CPPFLAGS := -I$(ROOT)include -I$(ROOT)lib -I$(ROOT)liquid-dsp/src
+CPPFLAGS := -I$(ROOT)include -I$(ROOT)lib -I$(ROOT)liquid-dsp/src/include
 
 INSTALL_DIR = $(PREFIX)/share/crts/plugins/$(notdir $(CURDIR))
 
 
-LIQUID_SRC := $(abspath $(CURDIR)/../liquid-dsp/src)
-LIBFEC_SRC := $(abspath $(CURDIR)/../liquid-dsp/libfec/src)
+LIQUID_SRC := $(abspath $(ROOT)/liquid-dsp/src)
+LIBFEC_SRC := $(abspath $(ROOT)/liquid-dsp/libfec/src)
 
 SRC_RPATH := -Wl,-rpath,$(LIQUID_SRC):$(LIBFEC_SRC)
 
@@ -36,6 +36,17 @@ undefine s
 readline.so_LDFLAGS := -lreadline
 
 rx.so_LDFLAGS := -luhd
+tx.so_LDFLAGS := -luhd
+
+liquidSync.so_LDFLAGS :=\
+ $(LIQUID_LDFLAGS)\
+ $(LIBFEC_LDFLAGS)\
+ $(SRC_RPATH)
+
+liquidFrame.so_LDFLAGS :=\
+ $(LIQUID_LDFLAGS)\
+ $(LIBFEC_LDFLAGS)\
+ $(SRC_RPATH)
 
 
 
@@ -46,7 +57,7 @@ rx.so_LDFLAGS := -luhd
 INSTALL_RPATH = patchelf --set-rpath '$(PREFIX)/lib'
 
 POST_INSTALL_COMMAND =\
- $(INSTALL_RPATH) $(INSTALL_DIR)/rx.so
+ $(INSTALL_RPATH) $(INSTALL_DIR)/liquidFrame.so
 
 
 # above we auto generate lines like this:

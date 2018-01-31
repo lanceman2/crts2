@@ -538,6 +538,9 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
 
     if(toDifferentThread)
     {
+        // There must be threadGroups for all FilterModules.
+        DASSERT(threadGroup, "");
+
         // In this case this function is being called from a thread
         // that is not from the threadGroup of this object.
 

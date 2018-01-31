@@ -19,6 +19,7 @@ apt-get install libboost-all-dev
 
 Maybe more...
 
+
 ## Installing from git clone source
 
 In the top source directory run
@@ -57,3 +58,30 @@ make install
 You could run all these commands in one line, but things can
 happen, like not having a dependency install, or a server
 is not serving a downloaded file.
+
+
+## Tests
+
+
+###  FFT monitor, urandom transmitter, receiver to hexdump
+
+```
+cd bin
+
+./termRun
+
+./termRun uhd_fft -f 915.0e6 -s 10.5e6 --args addr=192.168.10.3
+
+./termRun "cat /dev/urandom |\
+ ./crts_radio\
+ -f stdin\
+ -f liquidFrame\
+ -f tx [ --uhd addr=192.168.10.2 --freq 915.5 ]"
+
+./termRun "./crts_radio\
+ -f rx [ --uhd addr=192.168.10.4 --freq 915.5 ]\
+ -f liquidSync\
+ -f stdout |\
+ hexdump -v"
+```
+
