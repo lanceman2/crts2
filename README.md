@@ -76,12 +76,14 @@ cd bin
  ./crts_radio\
  -f stdin\
  -f liquidFrame\
- -f tx [ --uhd addr=192.168.10.2 --freq 915.5 ]"
+ -f tx [ --uhd addr=192.168.10.2 --freq 915.5 ]\
+ -d"
 
 ./termRun "./crts_radio\
  -f rx [ --uhd addr=192.168.10.4 --freq 915.5 ]\
  -f liquidSync\
- -f stdout |\
+ -f stdout\
+ -d |\
  hexdump -v"
 ```
 

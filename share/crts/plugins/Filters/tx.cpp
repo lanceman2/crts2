@@ -86,7 +86,7 @@ static void usage(void)
 
     errno = 0;
     throw "usage help"; // This is how return an error from a C++ constructor
-    // the module loader with catch this throw.
+    // the module loader will catch this throw.
 }
 
 

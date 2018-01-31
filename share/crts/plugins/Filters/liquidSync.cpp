@@ -27,9 +27,9 @@ class LiquidSync : public CRTSFilter
         unsigned char *subcarrierAlloc;
         ofdmflexframesync fs;
 
-        // rxFrameSyncCallback() needs to be able to call
+        // frameSyncCallback() needs to be able to call
         // CRTSFilter::writePush().
-    friend int rxFrameSyncCallback(unsigned char *header, int header_valid,
+    friend int frameSyncCallback(unsigned char *header, int header_valid,
                 unsigned char *payload, unsigned int payload_len,
                 int payload_valid, framesyncstats_s stats,
                 LiquidSync *liquidSync);
@@ -39,10 +39,10 @@ class LiquidSync : public CRTSFilter
 
 // TODO: This does not appear to be able to be declared as static because
 // is needs to be a friend of LiquidSync.  That's not so bad because when
-// this module is loaded the symbols are not exported and are kept
-// hidden.
+// this module is loaded the symbols are not exported and are kept hidden
+// from the rest of the crts_radio program.
 //
-int rxFrameSyncCallback(unsigned char *header, int header_valid,
+int frameSyncCallback(unsigned char *header, int header_valid,
                unsigned char *payload, unsigned int payload_len,
                int payload_valid, framesyncstats_s stats,
                LiquidSync *liquidSync) 
@@ -67,14 +67,14 @@ int rxFrameSyncCallback(unsigned char *header, int header_valid,
         //
         // A possible fix would be to catch their malloc() (or like call)
         // and override it with our own malloc() call.  We'd have to be
-        // careful and make sure that the buffer pointer is in the correct
-        // place in memory for this to work.
+        // careful and make sure that the passed buffer pointer is in the
+        // correct place in memory for this to work.
         //
 
         unsigned char *buffer = (unsigned char *)
             liquidSync->getBuffer(payload_len);
 
-        // TODO: This is bad coding practice.
+        // TODO: This is bad coding practice. See comment above.
         memcpy(buffer, payload, payload_len);
 
         liquidSync->writePush(buffer, payload_len, CRTSFilter::ALL_CHANNELS);
@@ -94,7 +94,7 @@ LiquidSync::LiquidSync(int argc, const char **argv):
 
     fs = ofdmflexframesync_create(numSubcarriers, cp_len,
                 taper_len, subcarrierAlloc,
-                (framesync_callback) rxFrameSyncCallback,
+                (framesync_callback) frameSyncCallback,
                 this/*callback data*/);
 
     DSPEW();
