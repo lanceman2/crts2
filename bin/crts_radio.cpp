@@ -25,10 +25,11 @@
 #include "get_opt.hpp"
 #include "LoadModule.hpp"
 // Read comments in ../include/crts/Filter.hpp.
+#include "pthread_wrappers.h" // some pthread_*() wrappers
 #include "crts/Filter.hpp"
 #include "FilterModule.hpp"
+#include "Thread.hpp"
 #include "Stream.hpp"
-#include "pthread_wrappers.h" // some pthread_*() wrappers
 
 
 
@@ -49,6 +50,9 @@ pthread_cond_t Stream::cond = PTHREAD_COND_INITIALIZER;
 // because it is atomic and it is only set to false once.  We call when
 // all streams use the isRunning flags, a graceful exit.
 //
+//
+// We must has the streams mutex lock before calling this.
+//
 size_t Stream::wait(void)
 {
     // We assume that the list of streams is a small list, like
@@ -59,9 +63,6 @@ size_t Stream::wait(void)
 
     // Only this thread can change the streams.size().
 
-    // Waiting for a stream to change state.
-    // They will signal us.
-    MUTEX_LOCK(&mutex);
 
     // No thread may signal this thread until they
     // get this mutex lock.
@@ -104,7 +105,7 @@ size_t Stream::wait(void)
     // Here we loose the mutex lock and wait
     // This COND_WAIT() macro wrapper recall the pthread_cond_wait()
     // if a signal interrupts the call.
-    COND_WAIT(&cond, &mutex);
+    ASSERT((errno = pthread_cond_wait(&cond, &mutex)) == 0, "");
 
     DSPEW("Got cond signal after waiting for %" PRIu32 " stream(s)",
             streams.size());
@@ -170,6 +171,9 @@ Stream::Stream(void): map(*this),
 { 
     // This is the main thread.
     DASSERT(pthread_equal(Thread::mainThread, pthread_self()), "");
+
+    ASSERT((errno = pthread_barrier_init(&barrier, 0,
+                numThreads + 1)) == 0, "");
 
     streams.push_back(this);
     DSPEW("now there are %d Streams", streams.size());
@@ -242,6 +246,7 @@ Stream::~Stream(void)
     // This is the main thread.
     DASSERT(pthread_equal(Thread::mainThread, pthread_self()), "");
 
+    ASSERT((errno = pthread_barrier_destroy(&barrier)) == 0, "");
 
     // The thread destructor removes itself from the
     // threads list.
@@ -286,6 +291,9 @@ void Stream::destroyStreams(void)
 
 
 // Return false on success.
+//
+// Each Stream is a factory of filter modules.  stream->load()
+// is how we make them.
 bool Stream::load(const char *name, int argc, const char **argv)
 {
     // This is the main thread.
@@ -312,6 +320,8 @@ bool Stream::load(const char *name, int argc, const char **argv)
 
 
 // Return false on success.
+//
+// Each stream manages the connections of filter modules.
 bool Stream::connect(uint32_t from, uint32_t to)
 {
     // This is the main thread.
@@ -798,7 +808,12 @@ static inline void finishThreads(void)
                             newThread->threadNum);
 
                 // Add this Filtermodule to this thread
-                it.second->thread = newThread;
+                newThread->addFilterModule(it.second);
+
+                DSPEW("%sfilter \"%s\" added to thread %" PRIu32,
+                        (it.second->isSource())?"source ":"",
+                        it.second->name.c_str(),
+                        newThread->threadNum);
             }
         }
     }
@@ -938,7 +953,7 @@ static int parseArgs(int argc, const char **argv)
                     thread = new Thread(stream);
 
                 // This filterModule is a member of this thread group.
-                filterModule->thread = thread;
+                thread->addFilterModule(filterModule);
 
                 ++i;
             }
@@ -1148,25 +1163,27 @@ int main(int argc, const char **argv)
     //
     ///////////////////////////////////////////////////////////////////
 
-
-
     DASSERT(Thread::createCount, "");
 
     {
         // We just use this barrier once at the starting of the threads,
         // so we use this stack memory to create and use it.
         pthread_barrier_t barrier;
-        Thread::barrier = &barrier;
-        DSPEW("have %" PRIu32 " threads", Thread::createCount);
+        DSPEW("have %zu threads", Thread::getTotalNumThreads());
         ASSERT((errno = pthread_barrier_init(&barrier, 0,
-                    Thread::createCount + 1)) == 0, "");
+                    Thread::getTotalNumThreads() + 1)) == 0, "");
 
         // Start the threads.
         for(auto stream : Stream::streams)
             for(auto thread : stream->threads)
-                thread->run();
+                thread->launch(&barrier);
 
+        MUTEX_LOCK(&Stream::mutex);
+
+        // Now we wait for all threads to be running past this
+        // barrier.
         BARRIER_WAIT(&barrier);
+
         ASSERT((errno = pthread_barrier_destroy(&barrier)) == 0, "");
     }
 
@@ -1226,11 +1243,21 @@ int main(int argc, const char **argv)
   it hits another thread in a CRTSFilter::write() call or it hits a sink
   filter.
 
+
+   TODO:  
+
+   Looks like all filters in thread must not have the flow interrupted
+   by another thread.  We need to add a check for that.
+
+
      */
 
 
+        // This is the main thread and it has nothing to do except wait.
+        // Stream::wait() returns the number of streams running.
 
-    for(auto stream : Stream::streams)
+
+   for(auto stream : Stream::streams)
         for(auto filterModule : stream->sources)
             // Above we checked that all source filters belong to a
             // particular thread.
@@ -1245,16 +1272,16 @@ int main(int argc, const char **argv)
             // CRTSFilter::write() in their own threads.
             filterModule->write(0,0,0, true);
 
+    while(Stream::wait());
 
-    // This is the main thread and it has nothing to do except wait.
-    Stream::wait();
+    MUTEX_UNLOCK(&Stream::mutex);
 
 
     // This will try to gracefully shutdown the stream and join the rest
     // of the threads:
     //
-    // TODO: But of course if any modules using libuhd it may fuck that
-    // up, and may exit when you try to gracefully shutdown.
+    // TODO: But of course if any modules are using libuhd it may fuck
+    // that up, and may exit when you try to gracefully shutdown.
     //
     Stream::destroyStreams();
 

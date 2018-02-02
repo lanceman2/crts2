@@ -9,9 +9,11 @@
 
 #include "crts/debug.h"
 #include "crts/Filter.hpp" // CRTSFilter user module interface
-#include "FilterModule.hpp" // opaque co-class
-#include "Stream.hpp"
 #include "pthread_wrappers.h"
+#include "FilterModule.hpp" // opaque co-class
+#include "Thread.hpp"
+#include "Stream.hpp"
+#include "Buffer.hpp"
 
 
 const uint32_t CRTSFilter::ALL_CHANNELS = (uint32_t) -1;
@@ -53,366 +55,39 @@ FilterModule::FilterModule(Stream *stream_in, CRTSFilter *filter_in,
 
 FilterModule::~FilterModule(void)
 {
+    // In here we'll handle the editing of the reader and writer lists
+    // for both this object and the reader and writer objects.
     
+    uint32_t i;
 
-    DSPEW();
+    for(i=0; i<numReaders; ++i)
+    {
+        FilterModule *f = readers[i];
+
+        // Remove this module from all f->writers
+        uint32_t w;
+        for(w=0; w<f->numWriters; ++w)
+        {
+            if(f->writers[w] == this)
+            {
+                // Push the writers over 1 in the array
+                while(w+1<f->numWriters)
+                    f->writers[w] = f->writers[w+1];
+            }
+        }
+    }
+
+
+    if(thread) thread->filterModules.remove(this);
+
+
+    DSPEW("deleting filter: \"%s\"", name.c_str());
 
     // TODO: take down connections
 
     // TODO: free memory from realloc()
 }
 
-
-// Filters, by default, do not know if they run as a single separate
-// thread, of with a group filters that share a thread.  That is decided
-// from the thing that starts the scenario which runs the program crts_radio
-// via command-line arguments, or other high level interface.  We call it
-// filter thread (process) partitioning.
-//
-// TODO: Extend thread partitioning to thread and process partitioning.
-//
-// This buffer pool thing is so we can pass buffers between any number of
-// filters.  By not having this memory on the stack we enable the filter
-// to be able to past this buffer from one thread filter to another, and
-// so on down the line.
-//
-// A filter can choose to reuse and pass through a buffer that was passed
-// to it from a previous adjust filter, or it can add another buffer to
-// pass up stream using the first buffer as just an input buffer.
-//
-// So ya, cases are:
-//
-//   1.  through away the box (buffer); really we recycle it; or
-//
-//   2.  repackage the data using the same box (buffer)
-//
-//
-#ifdef DEBUG
-// TODO: pick a better magic salt
-#  define MAGIC ((uint64_t) 1224979098644774913)
-#endif
-
-
-
-// TODO: Figure out the how to do the simplified case when the
-// mutex and conditional is not needed and the filter we write
-// is in the same thread.
-//
-// TODO: Figure out how to seamlessly, from the filter writers
-// prospective, do the inter-process filter write case.
-
-// We make a buffer that adds extra header to the top of it.
-
-
-struct Header
-{
-#ifdef DEBUG
-    uint64_t magic;
-#endif
-
-    // If there are threads then this
-    // mutex lock is held by the thread calling CTRSFilter::write().
-    pthread_mutex_t mutex;
-
-    // Then useCount drops to zero we recycle this buffer.  useCount is
-    // used in a multi-threaded version of reference counting.  Since this
-    // struct is only defined in this file, you can follow the use of this
-    // useCount in just this file.
-    std::atomic<uint32_t> useCount;
-    size_t len; // is constant after being created
-};
-
-
-// A struct with added memory to the bottom of it.
-struct Buffer
-{
-    struct Header header; // header must be first in struct
-
-    // This pointer should stay aligned so we can offset
-    // to this pointer and set this pointer to any struct
-    // or array that we want.
-
-    /* think struct padding HERE */
-
-    uint8_t ptr[1]; // just a pointer that already has 1 byte
-    // plus the memory below this struct.  The compiler guarantees that
-    // ptr is memory aligned because it is 1 byte in a structure.
-
-    /* think padding HERE TOO */
-};
-
-// Size of the buffer with added x bytes of memory.
-#define BUFFER_SIZE(x)  (sizeof(struct Buffer) + (x-1))
-
-// To access the top of the buffer from the ptr pointer.
-#define BUFFER_HEADER(ptr)\
-    ((struct Header*)\
-        (\
-            ((uint8_t*) ptr) \
-                - sizeof(struct Header)\
-        )\
-    )
-
-// Pointer to ptr in struct Buffer
-#define BUFFER_PTR(top)\
-    ((void*) (((struct Buffer *) top)->ptr))
-
-
-// This must be thread safe.
-static void freeBuffer(struct Header *h)
-{
-    DASSERT(h, "");
-#ifdef DEBUG
-    DASSERT(h->magic == MAGIC, "Bad memory pointer");
-    DASSERT(h->len > 0, "");
-    h->magic = 0;
-    memset(h, 0, h->len);
-#endif
-
-    // Making sure that buffers are cleaned up.
-    // This will spew too much to leave uncommented.
-    //WARN("freeing buffer=%p", h);
-
-    free(h);
-}
-
-
-#if 0
-void CRTSFilter::setBufferQueueLength(uint32_t n)
-{
-    filterModule->bufferQueueLength = n;
-}
-#endif
-
-
-
-static void *filterThreadWrite(Thread *thread)
-{
-    DASSERT(thread, "");
-    // No CRTSFilter can set the isRunning yet because
-    // of the barrier below.
-    DASSERT(thread->stream.isRunning, "");
-
-    // Reference to stream isRunning
-    std::atomic<bool> &isRunning = thread->stream.isRunning;
-
-    // Put some constant pointers on the stack.
-    pthread_mutex_t* mutex = &(thread->mutex);
-    pthread_cond_t* cond = &(thread->cond);
-
-    DASSERT(mutex, "");
-    DASSERT(cond, "");
-
-
-    // These variables will change at every loop:
-    FilterModule *filterModule;
-    void *buffer;
-    size_t len;
-    uint32_t channelNum;
-
-
-    // mutex limits access to all the data in Thread starting at
-    // Thread::filterModule in the class declaration, which can
-    // and will be changed between loops.
-    //
-    MUTEX_LOCK(mutex);
-    DSPEW("thread %" PRIu32 " starting", thread->threadNum);
-
-    DASSERT(!thread->filterModule, "");
-
-
-    // Now that we have the threads mutex lock we can wait for all
-    // the threads and the main thread to be in an "initialized" state.
-    //
-    // This BARRIER stops the main thread from queuing up thread read
-    // events before we have the threads ready to receive them via
-    // the pointer, thread->filterModule.
-    BARRIER_WAIT(thread->barrier);
-
-    // We can't have a request yet, while we hold the lock.
-    DASSERT(!thread->filterModule, "");
-
-    while(isRunning)
-    {
-        if(!thread->filterModule)
-        {
-            thread->threadWaiting = true;
-            // Here we will loose the mutex lock and block waiting for a
-            // conditional signal.
-            //
-            // WAITING FOR SIGNAL HERE
-            ASSERT((errno = pthread_cond_wait(cond, mutex)) == 0, "");
-            // Now we have the mutex lock again.
-            //
-            // By the time another thread (or this thread) gets this
-            // threads mutex lock again this thread will be calling
-            // the CTRSFilter::write().
-            thread->threadWaiting = false;
-        }
-        // else
-        //    had a filterModule already set before we first got the lock
-        //    so we will skip waiting for the signal.  This if/else
-        //    overcomes the first loop startup race condition, without the
-        //    use of a barrier or something like that.
-
-        // Now we have the mutex lock.
-
-        if(!thread->filterModule)
-            // There is no request so this is just a signal to return.
-            break;
-
-        // The filter module and what is written may change in each loop.
-        DASSERT(thread->filterModule->filter, "");
-        filterModule = thread->filterModule;
-
-        // We are a source (no writers) or we where passed a buffer
-        DASSERT((filterModule->writers && thread->buffer) ||
-                !filterModule->writers, "");
-        // Check that the buffer is one of ours.
-        DASSERT(!filterModule->writers || (thread->buffer &&
-                BUFFER_HEADER(thread->buffer)->magic == MAGIC), "");
-
-        // Receive the orders for this thread.  We need to set local
-        // stack variables with the values for this write() request.
-        buffer = thread->buffer;
-        len = thread->len;
-        channelNum = thread->channelNum;
-
-        // If another thread wants to know, they can look at this pointer to
-        // see this thread is doing its next writes, and we mark that we
-        // are ready to queue up the next request if we continue to loop.
-        thread->filterModule = 0;
-
-
-        MUTEX_UNLOCK(mutex);
-
-        // While this thread it carrying out its' orders new orders
-        // may be set, queued up, by another thread.
-        //
-        // This may be a time consuming call.
-
-        filterModule->filter->write(buffer, len, channelNum);
-
-
-        MUTEX_LOCK(mutex);
-
-        if(thread->queueMutex)
-        {
-            DASSERT(thread->queueCond, "");
-
-            MUTEX_LOCK(thread->queueMutex);
-
-            // We have one in the "queue" from FilterModule::write().
-            // There should be a thread waiting, because of this
-            // "queuing".
-            ASSERT((errno = pthread_cond_signal(
-                            thread->queueCond)) == 0, "");
-
-            MUTEX_UNLOCK(thread->queueMutex);
-
-            // And some time later the thread we just signaled will
-            // setup for the next CRTSFilter::write() call
-            // buffer, len, and channelNum.
-        }
-
-        // Remove/free any buffers that the filterModule->filter->write()
-        // created that have not been passed to another write() call, or
-        // are no longer on a thread write() stack.
-        filterModule->removeUnusedBuffers();
-
-        if(buffer)
-        {
-            // Remove any buffers that the above
-            // filterModule->filter->write() did not create and this
-            // threads above filterModule->filter->write() just happens to
-            // be the last user of.
-            struct Header *h = BUFFER_HEADER(buffer);
-
-            if(h->useCount.fetch_sub(1) == 1)
-                freeBuffer(h);
-        }
-    }
-
-    // Let the other threads know that we are done running this thread.
-    // If other code sees this as not set than this thread is still
-    // running.
-    thread->hasReturned = true;
-
-    MUTEX_UNLOCK(mutex);
-
-    // Now signal the master/main thread.
-    MUTEX_LOCK(&thread->stream.mutex);
-    DASSERT(isRunning == false, "");
-    ASSERT((errno = pthread_cond_signal(&thread->stream.cond))
-            == 0, "");
-    MUTEX_UNLOCK(&thread->stream.mutex);
- 
-    DSPEW("thread %" PRIu32 " finished returning", thread->threadNum);
-
-
-    return 0;
-}
-
-
-void Thread::run(void)
-{
-    //DSPEW("Thread %" PRIu32 " creating pthread", threadNum);
-
-    filterModule = 0;
-
-    errno = 0;
-    ASSERT((errno = pthread_create(&thread, 0/*pthread_attr_t* */,
-                (void *(*) (void *)) filterThreadWrite,
-                (void *) this)) == 0, "");
-}
-
-
-uint32_t Thread::createCount = 0;
-pthread_t Thread::mainThread = pthread_self();
-pthread_barrier_t *Thread::barrier = 0;
-
-
-// We should have a write lock on the stream to call this.
-// TODO: or add a lock and unlock call to this.
-Thread::Thread(Stream *stream_in):
-    cond(PTHREAD_COND_INITIALIZER),
-    mutex(PTHREAD_MUTEX_INITIALIZER),
-    threadNum(++createCount),
-    stream(*stream_in),
-    hasReturned(false),
-    filterModule(0)
-{
-    DASSERT(pthread_equal(mainThread, pthread_self()), "");
-    // There dam well better be a Stream object,
-    DASSERT(stream_in, "");
-    // and it better be in a running mode.
-    DASSERT(stream.isRunning, "");
-    stream.threads.push_back(this);
-    DSPEW("thread %" PRIu32, threadNum);
-}
-
-
-// We should have a write lock on the stream to call this.
-// TODO: or add a lock and unlock call to this.
-Thread::~Thread()
-{
-    DASSERT(pthread_equal(mainThread, pthread_self()), "");
-    // We better be in stream shutdown mode.
-    // TODO: until we make threads more dynamic.
-    DASSERT(!stream.isRunning, "");
-
-    MUTEX_LOCK(&mutex);
-    ASSERT((errno = pthread_cond_signal(&cond)) == 0, "");
-    MUTEX_UNLOCK(&mutex);
-    
-    DSPEW("waiting for thread %" PRIu32 " to join", threadNum);
-
-    ASSERT((errno = pthread_join(thread, 0/*void **retval */) == 0), "");
-
-    // remove this object from the list.    
-    DSPEW("Thread thread %" PRIu32 " joined", threadNum);
-    stream.threads.remove(this);
-}
 
 
 CRTSFilter::~CRTSFilter(void) { DSPEW(); }
@@ -622,7 +297,6 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
         //
         if(thread->filterModule)
         {
-            // This 
             pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
             pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 
@@ -649,7 +323,7 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
             // Now we have the mutex lock again.
             
             // TODO: the stream may not be running at this point ........
-            // ............. MORE CODE HERE
+            // ............. MORE CODE HERE?
             //
 
             MUTEX_LOCK(&thread->mutex);
@@ -722,4 +396,3 @@ void FilterModule::removeUnusedBuffers(void)
         buffers.pop();
     }
 }
-

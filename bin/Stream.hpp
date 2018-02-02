@@ -11,6 +11,10 @@ class Stream : public std::map<uint32_t, FilterModule*>
 {
     public:
 
+        // number of Thread objects running this stream.
+        // Added to in each Thread::Thread() call.
+        uint32_t numThreads;
+
         // For each Stream there is at least one source but there
         // can be any number of sources.  There we keep a list
         // of all the sources for this stream.
@@ -26,12 +30,15 @@ class Stream : public std::map<uint32_t, FilterModule*>
 
         bool load(const char *name, int argc, const char **argv);
 
+        bool unload(FilterModule* filtermodule);
+
         bool connect(uint32_t from, uint32_t to);
 
         std::atomic<bool> isRunning;
 
         // Stream factory
         Stream(void);
+
         // list of all streams created
         static std::list<Stream*> streams;
 
@@ -80,4 +87,14 @@ class Stream : public std::map<uint32_t, FilterModule*>
 
         // Never decreases.  Incremented with each new FilterModule.
         uint32_t loadCount;
+
+
+        // Barrier used at stream stop.  So we know when all
+        // threads in this stream have gotten out of their running loop.
+        //
+        // TODO: use it to stop and start the stream so that the stream
+        // can be stopped edited and then started.  Currently there is a
+        // global barrier that the start all all threads in all streams.
+        //
+        pthread_barrier_t barrier;
  };

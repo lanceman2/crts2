@@ -40,6 +40,7 @@ crts_radio_SOURCES :=\
  crts_radio.cpp\
  stdoutOverride.cpp\
  get_opt.cpp\
+ Thread.cpp\
  timer.cpp\
  Filter.cpp
 # stdout may be needed for user pipe line or whatever.

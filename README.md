@@ -63,7 +63,7 @@ is not serving a downloaded file.
 ## Tests
 
 
-###  FFT monitor, urandom transmitter, receiver to hexdump
+### DEMO: FFT monitor, urandom transmitter, receiver to hexdump
 
 ```
 cd bin
@@ -88,7 +88,27 @@ cd bin
 
 ```
 
-### BUG
+
+
+
+### BUG: memory leak?
+
+```
+cd bin
+
+./termRun
+
+./termRun "cat /dev/urandom |\
+ ./crts_radio\
+ -f stdin\
+ -f stdout\
+ -d | hexdump -v"
+
+```
+
+
+### BUG: Ctrl-C exit
+
 
 ```
 cd bin

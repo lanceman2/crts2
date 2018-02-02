@@ -86,7 +86,7 @@ class FilterModule
 
  
         // Buffer length needed/requested by this module.
-        uint32_t bufferQueueLength;
+        //uint32_t bufferQueueLength;
 
         // This write calls the underlying CRTSFilter::write() functions
         // or signals a thread that calls the underlying
@@ -127,110 +127,4 @@ class FilterModule
     // FilterModule interface.  Call it interface hiding where the
     // FilterModule is the hidden part of CRTSFilter.
     friend Stream;
-};
-
-
-struct Buffer;
-
-// There are no Thread objects is there was no
-// --thread command-line options (or equivalent)
-//
-// It groups filters with a running thread.
-//
-// There can be many filter modules associated with a given Thread.
-// This is just a wrap of a pthread and it's associated thread
-// synchronization primitives, and a little more stuff.
-class Thread
-{
-    public:
-
-        // Launch the pthread via pthread_create()
-        // We separated starting the thread from the constructor so that
-        // the user and look at the connection and thread topology before
-        // starting the threads.
-        void run(void);
-
-        Thread(Stream *stream);
-
-        // This will pthread_join() after setting a running flag.
-        ~Thread();
-
-        pthread_t thread;
-        pthread_cond_t cond;
-        pthread_mutex_t mutex;
-
-
-        // We let the main thread be 0 and this starts at 1
-        // This is fixed after the object creation.
-        // This is mostly so we can see small thread numbers like
-        // 0, 1, 2, 3, ... 8 whatever, not shit like 23431, 5634, ...
-        uint32_t threadNum;
-
-        // Number of these objects created.
-        static uint32_t createCount;
-
-        static pthread_t mainThread;
-        static pthread_barrier_t *barrier;
-
-        // stream is the fixed/associated Stream which contains
-        // any filter modules that may be involved.
-        Stream &stream;
-
-        // At each loop we may reset the buffer, len, and channel
-        // to call filterModule->filter->write(buffer, len, channel);
-
-        /////////////////////////////////////////////////////////////
-        //       All Thread data below here is changing data.
-        //       We must have the mutex just above to access these:
-        /////////////////////////////////////////////////////////////
-
-        // These may be setup by another thread that is feeding data to
-        // this thread via Filtermodule::write(), the memory of these
-        // are in the Filtermodule::write() stack.  We use them to
-        // pop the write queue.
-        //
-        pthread_mutex_t *queueMutex;
-        pthread_cond_t *queueCond;
-
-
-        // We have two cases, blocks of code, when this thread is not
-        // holding the mutex lock:
-        //
-        //       1) in the block that calls CRTSFilter::write()
-        //
-        //       2) in the pthread_cond_wait() call
-        //
-        // We need this flag so we know which block of code the thread is
-        // in from the main thread, otherwise we'll call
-        // pthread_cond_signal() when it is not necessary.
-        //
-        //
-        // TODO: Does calling pthread_cond_signal() when there are no
-        // listeners make a mode switch, or use much system resources?
-        // I would think checking a flag uses less resources than
-        // calling pthread_cond_signal() when there is no listener.
-        // It adds a function call or two to the stack and that must be
-        // more work than checking a flag.  If it adds a mode switch than
-        // this flags adds huge resource savings.
-        //
-        bool threadWaiting; // thread calling pthread_cond_wait()
-
-
-
-        bool hasReturned; // the thread returned from its callback
-
-        // The Filter module that will have it's CRTSFilter::write() called
-        // next.  Set to 0 if this is none.
-        FilterModule *filterModule;
-
-        // buffer, len, channelNum are for calling 
-        // CRTSFilter::write(buffer, len, channelNum)
-        //
-        void *buffer;
-
-        // Buffer length
-        size_t len;
-
-        // Current channel to write.
-        uint32_t channelNum;
 };
