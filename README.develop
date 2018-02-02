@@ -1,0 +1,53 @@
+
+
+Classes internal to program crts_radio:
+
+
+   Thread
+
+         static global thread barrier
+         static mainThread
+
+
+     each Thread
+
+         is a list of FilterModule
+
+
+  FilterModule
+
+         container for CRTSFilter
+
+         FilterModule::write()
+
+              1) if not different thread calls CRTSFilter::write()
+    
+            or
+
+              2) or signals cond to thread to call CRTSFilter::write()
+                 or blocks and ... if the queue is full
+
+
+  Stream
+
+         static factory of Stream
+         static mutex
+         static cond
+
+    each Stream
+
+         atomic bool isRunning
+
+         is a factory of FilterModule
+
+            load()   - create a FilterModule for a stream
+            unload() - delete a FilterModule from a stream
+
+         is a factory of Thread
+
+             createThread()
+
+             destroyThread()
+
+         is a list of Thread
+         
