@@ -12,6 +12,55 @@
 #include "defaultUSRP.hpp" // defaults: RX_FREQ, RX_RATE, RX_GAIN
 
 
+// RANT:
+//
+// It'd be real nice if the UHD API would document what is thread-safe and
+// what is not for all the API.  We can only guess how to use this stupid
+// UHD API by looking at example codes.  From the program crashes I've
+// seen there are clearly some things that are not thread safe, or just
+// bad code in libuhd.
+//
+// The structure of the UHD API implies that you should be able to use a
+// single uhd::usrp::multi_usrp::sptr to do both transmission and
+// receiving but none of the example do that, the examples imply that you
+// must make two uhd::usrp::multi_usrp::sptr objects one for (TX)
+// transmission and one for (RX) receiving.
+
+// register UHD message handler
+// Let it use stdout, or stderr by default???
+//uhd::msg::register_handler(&uhd_msg_handler);
+
+// We do not know where UHD is thread safe, so, for now, we do this
+// before we make threads.  The UHD examples do it this way too.
+// We set up the usrp (RX and TX) objects in the main thread here:
+
+
+// UHD BUG WORKAROUND:
+//
+// We must make the two multi_usrp objects before we configure them by
+// setting frequency, rate (bandWidth), and gain; otherwise the process
+// exits with status 0.  And it looks like you can use the same object for
+// both receiving (RX) and transmitting (TX).  The UHD API seems to be a
+// piece of shit in general.  Here we are keeping a list of stupid shit it
+// does, and a good API will never do:
+//
+//    - calls exit; instead of throwing an exception
+//
+//    - spawns threads and does not tell you it does in the
+//      documentation
+//
+//    - spews to stdout (we made a work-around for this)
+//
+//    - catches signals
+//
+//
+// It may be libBOOST doing this shit...  so another thing to add to the
+// bad things list:
+//
+//   - links with BOOST
+//
+// We sometimes get Floating point exception and the program exits
+
 
 class Rx : public CRTSFilter
 {
@@ -216,40 +265,46 @@ ssize_t Rx::write(void *buffer_in, size_t len, uint32_t channelNum)
     if(!device) init();
 
 
-    std::complex<float> *buffer = (std::complex<float> *)
-        getBuffer(sizeof(std::complex<float>)*numComplexFloats);
+    // source filters loop like this, making their own data.
 
-    uhd::rx_metadata_t metadata; // set by recv();
-
-    size_t numSamples = device->recv(
-            (unsigned char *)buffer, numComplexFloats, metadata,
-            uhd::io_type_t::COMPLEX_FLOAT32,
-            uhd::device::RECV_MODE_ONE_PACKET,
-            // TODO: fix this timeout ??
-            1.0/*timeout double seconds*/);
-
-    if(numSamples != numComplexFloats)
-        DSPEW("RX recv metadata.error_code=%d numSamples = %zu",
-            metadata.error_code, numSamples);
-
-    if(metadata.error_code && metadata.error_code !=
-            uhd::rx_metadata_t::ERROR_CODE_TIMEOUT)
+    while(stream->isRunning)
     {
-        DSPEW("RX recv metadata.error_code=%d numSamples = %zu",
-            metadata.error_code, numSamples);
-        // For error codes see:
-        // https://files.ettus.com/manual/structuhd_1_1rx__metadata__t.html#ae3a42ad2414c4f44119157693fe27639
-        DSPEW("uhd::rx_metadata_t::ERROR_CODE_NONE=%d",
-            uhd::rx_metadata_t::ERROR_CODE_NONE);
-        DSPEW("uhd::rx_metadata_t::ERROR_CODE_TIMEOUT=%d",
-            uhd::rx_metadata_t::ERROR_CODE_TIMEOUT);
+
+        std::complex<float> *buffer = (std::complex<float> *)
+            getBuffer(sizeof(std::complex<float>)*numComplexFloats);
+
+        uhd::rx_metadata_t metadata; // set by recv();
+
+        size_t numSamples = device->recv(
+                (unsigned char *)buffer, numComplexFloats, metadata,
+                uhd::io_type_t::COMPLEX_FLOAT32,
+                uhd::device::RECV_MODE_ONE_PACKET,
+                // TODO: fix this timeout ??
+                1.0/*timeout double seconds*/);
+
+        if(numSamples != numComplexFloats)
+            DSPEW("RX recv metadata.error_code=%d numSamples = %zu",
+                    metadata.error_code, numSamples);
+
+        if(metadata.error_code && metadata.error_code !=
+                uhd::rx_metadata_t::ERROR_CODE_TIMEOUT)
+        {
+            DSPEW("RX recv metadata.error_code=%d numSamples = %zu",
+                    metadata.error_code, numSamples);
+            // For error codes see:
+            // https://files.ettus.com/manual/structuhd_1_1rx__metadata__t.html#ae3a42ad2414c4f44119157693fe27639
+            DSPEW("uhd::rx_metadata_t::ERROR_CODE_NONE=%d",
+                    uhd::rx_metadata_t::ERROR_CODE_NONE);
+            DSPEW("uhd::rx_metadata_t::ERROR_CODE_TIMEOUT=%d",
+                    uhd::rx_metadata_t::ERROR_CODE_TIMEOUT);
+        }
+
+        DASSERT(!(metadata.error_code && numSamples), "");
+
+        if(numSamples > 0)
+            writePush(buffer, numSamples*sizeof(std::complex<float>),
+                    CRTSFilter::ALL_CHANNELS);
     }
-
-    DASSERT(!(metadata.error_code && numSamples), "");
-
-    if(numSamples > 0)
-        writePush(buffer, numSamples*sizeof(std::complex<float>),
-                CRTSFilter::ALL_CHANNELS);
 
     return 1; // TODO: what to return????
 }

@@ -1,4 +1,4 @@
-class ThreadGroup;
+class Thread;
 
 // A factory of FilterModule class objects.
 // We keep a list (map) in Stream.
@@ -61,7 +61,17 @@ class Stream : public std::map<uint32_t, FilterModule*>
 
 
         // A list of threads that run a list of filter modules.
-        std::list<ThreadGroup *> threadGroups;
+        std::list<Thread *> threads;
+
+
+        // So we may call wait()
+        static pthread_cond_t cond;
+        static pthread_mutex_t mutex;
+
+
+        // Waits until a stream and all it's threads is cleaned up.
+        // Returns the number of remaining running streams.
+        static size_t wait(void);
 
 
     private:

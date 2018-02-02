@@ -10,6 +10,9 @@
 #include "crts/crts.h" // for:  FILE *crtsOut
 
 
+#define BUFLEN 1024
+
+
 class Readline : public CRTSFilter
 {
     public:
@@ -21,22 +24,22 @@ class Readline : public CRTSFilter
 
     private:
 
-        bool reading; // So can we exit do to command from read()
+        void run(void);
+
         const char *prompt;
         const char *sendPrefix;
-        char *line; // last line read buffer
         size_t sendPrefixLen;
-        ssize_t cleanExit(void);
-        size_t promptLen;
+        char *line; // last line read buffer
 };
 
 
-static void usage(const char *arg)
+static void usage(const char *arg = 0)
 {
     char name[64];
 
-    fprintf(stderr, "module: %s: unknown option arg=\"%s\"\n",
-            CRTSFILTER_NAME(name, 64), arg);
+    if(arg)
+        fprintf(stderr, "module: %s: unknown option arg=\"%s\"\n",
+                CRTSFILTER_NAME(name, 64), arg);
 
     fprintf(stderr,
 "\n"
@@ -72,8 +75,10 @@ static void usage(const char *arg)
 
 
 Readline::Readline(int argc, const char **argv):
-    reading(true), prompt("> "),
-    sendPrefix("received: "), line(0)
+    prompt("> "),
+    sendPrefix("received: "),
+    sendPrefixLen(strlen(sendPrefix)),
+    line(0)
 {
     int i = 0;
 
@@ -92,6 +97,14 @@ Readline::Readline(int argc, const char **argv):
         if(!strcmp("--send-prefix", argv[i]) && i+1 < argc)
         {
             sendPrefix = argv[++i];
+
+            sendPrefixLen = strlen(sendPrefix);
+            if(sendPrefixLen > BUFLEN/2)
+            {
+                fprintf(stderr,"argument: \"%s\" is to long\n\n",
+                        argv[i-1]);
+                usage();
+            }
             ++i;
             continue;
         }
@@ -99,14 +112,13 @@ Readline::Readline(int argc, const char **argv):
         usage(argv[i]);
     }
 
-    promptLen = strlen(prompt);
-    
     // Because libuhd pollutes stdout we must use a different readline
     // prompt stream:
     rl_outstream = crtsOut;
 
-    sendPrefixLen = strlen(sendPrefix);
+    DSPEW();
 }
+
 
 Readline::~Readline(void)
 {
@@ -117,130 +129,86 @@ Readline::~Readline(void)
     }
 
     // TODO: cleanup readline?
-
 }
 
-
-// From crts_radio.cpp
-extern void crtsExit(void);
-
-
-ssize_t Readline::cleanExit(void)
-{
-    crtsExit();
-    // To stop the race so read don't go to another blocking
-    // readline() call before the mainThread can stop this
-    // thread.
-    reading = false;
-    return 0;
-}
 
 
 #define IS_WHITE(x)  ((x) < '!' || (x) > '~')
 //#define IS_WHITE(x)  ((x) == '\n')
 
-// TODO: readline makes extra copies of the input data, and then we have
-// to copy it yet again to the input buffer.  All we really need it to do
-// is write to the buffer pointed to by the pointer passed in the function
-// argument, buffer.  Oh well.  It's small beans any way.  Inefficient,
-// but small price for lots of functionally that readline provides.  The
-// amount of data read by readline is usually small anyway.
-//
-// We may consider using isatty() to choose between modules readline.cpp
-// and fd0.cpp.
-//
-//
-// This call will block until we get input.
-//
-//
-// This runs in another thread from Readline::read()
-// We write to crtsOut
-ssize_t Readline::write(void *buffer, size_t bufferLen, uint32_t channelNum)
+
+void Readline::run(void)
 {
-    // This module is a source.
-    DASSERT(!buffer, "");
+    // get a line
 
-    // Repurpose the passed in variables buffer and bufferLen
-    bufferLen = 1024;
-    buffer = getBuffer(bufferLen);
-
-    while(reading)
+    line = readline(prompt);
+    if(!line)
     {
-        // get a line
-        line = readline(prompt);
-        if(!line) return cleanExit();
+        stream->isRunning = false;
+        return;
+    }
+#if 0
+    fprintf(stderr, "%s:%d: GOT: \"%s\"  prompt=\"%s\"\n",
+            __BASE_FILE__, __LINE__, line, prompt);
+#endif
+    // Strip off trailing white chars:
+    size_t len = strlen(line);
+    while(len && IS_WHITE(line[len -1]))
+        line[--len] = '\0';
 
-        //fprintf(stderr, "%s:%d: GOT: \"%s\"  prompt=\"%s\"\n", __BASE_FILE__, __LINE__, line, prompt);
+    //fprintf(stderr, "\n\nline=\"%s\"\n\n", line);
 
-        // Strip off trailing white chars:
-        size_t len = strlen(line);
-        while(len && IS_WHITE(line[len -1]))
-            line[--len] = '\0';
-
-        //fprintf(crtsOut, "\n\nbuffer=\"%s\"\n\n", line);
-
-        if(len < 1)
-        {
-            free(line);
-            line = 0;
-            continue;
-        }
-
-        // TODO: add tab help, history saving, and other readline user
-        // interface stuff.
-
-        if(!strcmp(line, "exit") || !strcmp(line, "quit"))
-            return cleanExit();
-
-        // Return char counter:
-        ssize_t nRet = 0;
-
-
-        // TODO: Skip the prefix if it's too long ??
-        // Better than dumb segfault, for now...
-        if(sendPrefixLen && sendPrefixLen < bufferLen)
-        {
-            // Put the prefix in the buffer first:
-            memcpy(buffer, sendPrefix, sendPrefixLen);
-            // Update remaining buffer length and advance the buffer pointer
-            bufferLen -= sendPrefixLen;
-            buffer = (void *) (((char *) buffer) + sendPrefixLen);
-            nRet += sendPrefixLen;
-        }
-
-        // We put the '\0' terminator in the buffer too:
-        //
-        if(len < bufferLen)
-        {
-            // Very likely case for a large buffer.  We eat it all at
-            // once, null ('\0') terminator and all.
-            memcpy(buffer, line, len + 1);
-            // We don't need to send the '\0'
-            nRet += len;
-        }
-        else
-        {
-            // In this case we just ignore the extra data.
-            memcpy(buffer, line, bufferLen -1);
-            // We add a '\0' terminator as the last char
-            // in the buffer.
-            ((char *)buffer)[bufferLen - 1] = '\0';
-            // We don't need to send the '\0'
-            nRet += bufferLen;
-        }
-
-        // We do not add the sendPrefix to the history.  Note: buffer was
-        // '\0' terminated just above, so the history string is cool.
-        add_history((char *) buffer);
-
-        free(line); // reset readline().
+    if(len < 1)
+    {
+        free(line);
         line = 0;
-
-        writePush(buffer, nRet, CRTSFilter::ALL_CHANNELS);
+        return; // continue to next loop readline()
     }
 
-    // TODO: We set reading to false and so we just return 0 as a EOF signal?
-    return 0;
+    // TODO: add tab help, history saving, and other readline user
+    // interface stuff.
+
+    if(!strcmp(line, "exit") || !strcmp(line, "quit"))
+    {
+        stream->isRunning = false;
+        return;
+    }
+
+    ssize_t bufLen = len + sendPrefixLen + 2;
+    char *buffer = (char *) getBuffer(bufLen);
+
+    memcpy(buffer, sendPrefix, sendPrefixLen);
+    memcpy(&buffer[sendPrefixLen], line, len);
+    buffer[bufLen-2] = '\n';
+    buffer[bufLen-1] = '\0';
+
+
+    // We do not add the sendPrefix to the history.  Note: buffer was
+    // '\0' terminated just above, so the history string is cool.
+    add_history(line);
+
+    free(line); // reset readline().
+    line = 0;
+
+    writePush((void *) buffer, bufLen, CRTSFilter::ALL_CHANNELS);
+}
+
+
+
+// This call will block until we get input.
+//
+// We write to crtsOut
+//
+ssize_t Readline::write(void *buffer_in, size_t bufferLen_in, uint32_t channelNum)
+{
+    // This module is a source.
+    DASSERT(!buffer_in, "");
+
+    // Source filters loop like this, regular filters do not.
+    while(stream->isRunning)
+        run();
+
+    return 0; // done
 }
 
 

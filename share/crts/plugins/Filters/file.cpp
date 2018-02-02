@@ -59,7 +59,7 @@ File::File(int argc, const char **argv): file(0), filename("crts_file.txt")
     else if(argc == 1)
         filename = argv[0];
 
-    file = fopen(filename, "w");
+    file = fopen(filename, "a");
     if(!file)
     {
         std::string str("fopen(\"");
@@ -106,6 +106,8 @@ ssize_t File::write(void *buffer, size_t len, uint32_t channelNum)
 
     if(ret != len)
         NOTICE("fwrite(,1,%zu,) only wrote %zu bytes", len, ret);
+
+    fflush(file);
 
     return ret;
 }

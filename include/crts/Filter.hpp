@@ -265,12 +265,6 @@ class CRTSFilter
         //static const uint32_t defaultBufferQueueLength;
         
 
-        // The stream is running and user may set this to cleanly
-        // shutdown the Stream (the group of all filters).
-        
-        std::atomic<bool> *isRunning;
-
-
     // The FilterModule has to manage the CRTSFilter adding readers and
     // writers from between separate CRTSFilter objects.  This is better
     // than exposing methods that should not be used by CRTSFilter

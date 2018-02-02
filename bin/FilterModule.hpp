@@ -11,7 +11,7 @@
 //
 
 class Stream;
-class ThreadGroup;
+class Thread;
 class CRTSFilter;
 
 
@@ -26,6 +26,9 @@ class FilterModule
                 std::string name);
 
         ~FilterModule(void);
+
+        // What stream this filter belongs to:
+        Stream *stream;
 
         CRTSFilter *filter; // users co-class
 
@@ -98,7 +101,7 @@ class FilterModule
 
 
         // the thread that this filter module is running in.
-        ThreadGroup *threadGroup;
+        Thread *thread;
 
 
         // Is set from the CRTSFilter constructor and stays constant.
@@ -110,6 +113,11 @@ class FilterModule
 
 
         void removeUnusedBuffers(void);
+
+
+        // Is this filter module a data source.  If it has no writers
+        // than it is a source.
+        inline bool isSource(void) { return (writers?false:true); };
 
 
     friend CRTSFilter; // CRTSFilter and FilterModule are co-classes
@@ -124,15 +132,15 @@ class FilterModule
 
 struct Buffer;
 
-// There are no ThreadGroup objects is there was no
+// There are no Thread objects is there was no
 // --thread command-line options (or equivalent)
 //
 // It groups filters with a running thread.
 //
-// There can be many filter modules associated with a given ThreadGroup.
+// There can be many filter modules associated with a given Thread.
 // This is just a wrap of a pthread and it's associated thread
 // synchronization primitives, and a little more stuff.
-class ThreadGroup
+class Thread
 {
     public:
 
@@ -142,10 +150,10 @@ class ThreadGroup
         // starting the threads.
         void run(void);
 
-        ThreadGroup(Stream *stream);
+        Thread(Stream *stream);
 
         // This will pthread_join() after setting a running flag.
-        ~ThreadGroup();
+        ~Thread();
 
         pthread_t thread;
         pthread_cond_t cond;
@@ -172,7 +180,7 @@ class ThreadGroup
         // to call filterModule->filter->write(buffer, len, channel);
 
         /////////////////////////////////////////////////////////////
-        //       All ThreadGroup data below here is changing data.
+        //       All Thread data below here is changing data.
         //       We must have the mutex just above to access these:
         /////////////////////////////////////////////////////////////
 

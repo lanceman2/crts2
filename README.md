@@ -85,10 +85,38 @@ cd bin
  -f stdout\
  -d |\
  hexdump -v"
+
+```
+
+### BUG
+
+```
+cd bin
+
+./termRun
+
+./termRun uhd_fft -f 915.0e6 -s 10.5e6 --args addr=192.168.10.3
+
+./termRun "cat /dev/urandom |\
+ ./crts_radio\
+ -f stdin\
+ -f liquidFrame\
+ -f tx [ --uhd addr=192.168.10.2 --freq 915.5 ]\
+ -d"
+
+./termRun "./crts_radio\
+ -f rx [ --uhd addr=192.168.10.4 --freq 915.5 ]\
+ -f liquidSync\
+ -f stdout\
+ -t 0 -t 1 -t 2\
+ -d |\
+ hexdump -v"
+
 ```
 
 
-### readline with regular file
+
+### readline with fifo file
 
 
 ```
@@ -96,16 +124,21 @@ cd bin
 
 ./termRun
 
-./termRun "\
- ./crts_radio\
- -f readline\
- -f file [ xxxx ]\
- -d"
+rm xxxx
+mkfifo xxxx
 
-./termRun "cat xxxx |\
- ./crts_radio\
- -f stdin\
- -f stdout\
- -d"
+./termRun "./crts_radio\
+ -f readline\
+ -f file [ xxxx ]"
+
+./termRun "cat xxxx"
+
+sleep 2 ; rm xxxx
+
+
 ```
+
+### TODO: rx and tx in one crts_radio
+
+
 

@@ -31,3 +31,16 @@
         ASSERT(errno == 0, "pthread_mutex_unlock() failed");    \
         MSPEW("Mutex Unlocked");                                \
     } while(0)
+
+
+// We need to recall pthread_cond_wait() in the main thread each time a
+// signal is caught.
+
+#define COND_WAIT(cond, mutex)                                          \
+    do {                                                                \
+        int ret;                                                        \
+        /*DSPEW("thread waiting on cond");*/                            \
+        while((ret = pthread_cond_wait((cond), (mutex))) == EINTR);     \
+        ASSERT(ret == 0, "pthread_cond_wait()=%d failed", ret);         \
+        /*DSPEW("Exit cond"); */                                        \
+    } while(0)

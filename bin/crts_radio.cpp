@@ -34,13 +34,128 @@
 
 std::list<Stream*> Stream::streams;
 
+// static Stream mutex and condition variables for
+// Stream::wait()
+//
+pthread_mutex_t Stream::mutex = PTHREAD_MUTEX_INITIALIZER;
+pthread_cond_t Stream::cond = PTHREAD_COND_INITIALIZER;
+
+
+// Waits until a stream and all it's threads is cleaned up.  Returns the
+// number of remaining running streams.
+//
+// Only the main thread will delete streams and only when the atomic bool
+// isRunning is set to false. So we do not need a mutex to check this flag
+// because it is atomic and it is only set to false once.  We call when
+// all streams use the isRunning flags, a graceful exit.
+//
+size_t Stream::wait(void)
+{
+    // We assume that the list of streams is a small list, like
+    // the number of cores on the CPU.
+
+    // This is the main thread.
+    DASSERT(pthread_equal(Thread::mainThread, pthread_self()), "");
+
+    // Only this thread can change the streams.size().
+
+    // Waiting for a stream to change state.
+    // They will signal us.
+    MUTEX_LOCK(&mutex);
+
+    // No thread may signal this thread until they
+    // get this mutex lock.
+
+    if(streams.size())
+    {
+        for(auto stream: streams)
+        {
+            if(!stream->isRunning)
+            {
+                // It's okay that we edit this streams list, because will
+                // will return without going to the next element.
+                //
+                // We cannot delete the stream while holding the lock.
+                // We don't need the lock to delete the stream.
+                //
+                MUTEX_UNLOCK(&mutex);
+                delete stream;
+                // Only this thread can change the streams.size() so it's
+                // okay to call size().
+                return streams.size();
+            }
+        }
+    }
+    else
+    {
+        MUTEX_UNLOCK(&mutex);
+        return 0; // We're done.  There are no streams left.
+    }
+
+    // All streams have isRunning set or are about to signal us after they
+    // get the mutex lock.  The threads that are setting stream->isRunning
+    // to false now, will signal us in their last block of code in their
+    // pthread callback where they block getting the mutex before
+    // signaling.  I.E. this should work in all cases so long as
+    // this is the main thread.
+
+    DSPEW("waiting for %" PRIu32 " stream(s) to finish", streams.size());
+
+    // Here we loose the mutex lock and wait
+    // This COND_WAIT() macro wrapper recall the pthread_cond_wait()
+    // if a signal interrupts the call.
+    COND_WAIT(&cond, &mutex);
+
+    DSPEW("Got cond signal after waiting for %" PRIu32 " stream(s)",
+            streams.size());
+
+    // Now we have the mutex lock again.
+
+    // The number of streams should not have changed while we where
+    // waiting.
+    DASSERT(streams.size(), "streams.size()=%zu", streams.size());
+
+    // We should be able to find a stream with isRunning == false.
+    for(auto stream: streams)
+    {
+        if(!stream->isRunning)
+        {
+            // We cannot delete the stream while holding the lock.
+            // We don't need the lock to delete the stream.
+            //
+            MUTEX_UNLOCK(&mutex);
+            delete stream;
+            // Only this thread can change the streams.size() so it's okay
+            // to call size().
+            return streams.size();
+        }
+    }
+
+    // We should not get here.  It would mean that other threads are
+    // deleting streams, and we assumed that that can't happen.  Only the
+    // main thread can delete streams.
+
+    DASSERT(0, "There are no streams with isRunning false,"
+            " streams.size()=%zu", streams.size());
+
+    MUTEX_UNLOCK(&mutex);
+
+    // We should not get here.
+
+    return streams.size();
+}
+
+
 // Compiles the list of sources after connections are finished being
 // added.
 void Stream::getSources(void)
 {
+    // This is the main thread.
+    DASSERT(pthread_equal(Thread::mainThread, pthread_self()), "");
+
     sources.clear();
     for(auto &val : map)
-        if(!val.second->writers)
+        if(val.second->isSource())
             // It has no writers so val->second is a FilterModule that is
             // a source.
             sources.push_back(val.second);
@@ -52,14 +167,20 @@ void Stream::getSources(void)
 
 Stream::Stream(void): map(*this),
     isRunning(true), haveConnections(false), loadCount(0)
-{
+{ 
+    // This is the main thread.
+    DASSERT(pthread_equal(Thread::mainThread, pthread_self()), "");
+
     streams.push_back(this);
     DSPEW("now there are %d Streams", streams.size());
 }
 
-
-Stream::~Stream(void)
+#if 0
+Stream::wait(void)
 {
+    // This is the main thread.
+    DASSERT(pthread_equal(Thread::mainThread, pthread_self()), "");
+
     DSPEW();
 
     bool threadRunning = true;
@@ -68,36 +189,36 @@ Stream::~Stream(void)
     {
         threadRunning = false;
         // First we wait for threads to finish running.
-        for(auto threadGroup: threadGroups)
+        for(auto thread: threads)
         {
-            DASSERT(threadGroup, "");
-            MUTEX_LOCK(&threadGroup->mutex);
+            DASSERT(thread, "");
+            MUTEX_LOCK(&thread->mutex);
 
-            if(threadGroup->filterModule)
+            if(thread->filterModule)
             {
                 // this thread is running or about to run.
                 DSPEW("waiting for thread % " PRIu32 
                         " filter \"%s\" to return",
-                        threadGroup->threadNum,
-                        threadGroup->filterModule->name.c_str());
-                if(threadGroup->threadWaiting)
+                        thread->threadNum,
+                        thread->filterModule->name.c_str());
+                if(thread->threadWaiting)
                     // signal the thread that is waiting now.
-                    // The flag threadGroup->threadWaiting and the mutex guarantee
+                    // The flag thread->threadWaiting and the mutex guarantee
                     // that the thread is waiting now.
-                    ASSERT((errno = pthread_cond_signal(&threadGroup->cond))
+                    ASSERT((errno = pthread_cond_signal(&thread->cond))
                             == 0, "");
                     // The thread will wake up only after we release the threads
                     // mutex lock down below here.
 
                 threadRunning = true;
-                MUTEX_UNLOCK(&threadGroup->mutex);
+                MUTEX_UNLOCK(&thread->mutex);
 #ifndef DEBUG
                 // Check them all if in debug mode
                 break;
 #endif
             }
 
-            MUTEX_UNLOCK(&threadGroup->mutex);
+            MUTEX_UNLOCK(&thread->mutex);
         }
         // TODO: sleep is a little kludgey.  We should get a signal
         // from the last thread instead.
@@ -112,12 +233,21 @@ Stream::~Stream(void)
             nanosleep(&ts, 0);
         }
     }
+}
+#endif
 
-    // The threadGroup destructor removes itself from the
-    // threadGroups list.
-    for(auto tt = threadGroups.begin();
-            tt != threadGroups.end();
-            tt = threadGroups.begin())
+
+Stream::~Stream(void)
+{
+    // This is the main thread.
+    DASSERT(pthread_equal(Thread::mainThread, pthread_self()), "");
+
+
+    // The thread destructor removes itself from the
+    // threads list.
+    for(auto tt = threads.begin();
+            tt != threads.end();
+            tt = threads.begin())
         delete *tt;
 
     // delete the filter modules and remove them from the list (map).
@@ -146,6 +276,9 @@ Stream::~Stream(void)
 
 void Stream::destroyStreams(void)
 {
+    // This is the main thread.
+    DASSERT(pthread_equal(Thread::mainThread, pthread_self()), "");
+
     auto it = streams.begin();
     for(;it != streams.end(); it = streams.begin())
         delete (*it);
@@ -155,6 +288,9 @@ void Stream::destroyStreams(void)
 // Return false on success.
 bool Stream::load(const char *name, int argc, const char **argv)
 {
+    // This is the main thread.
+    DASSERT(pthread_equal(Thread::mainThread, pthread_self()), "");
+
     FilterModule *m = 0;
 
     void *(*destroyFilter)(CRTSFilter *);
@@ -178,6 +314,9 @@ bool Stream::load(const char *name, int argc, const char **argv)
 // Return false on success.
 bool Stream::connect(uint32_t from, uint32_t to)
 {
+    // This is the main thread.
+    DASSERT(pthread_equal(Thread::mainThread, pthread_self()), "");
+
     if(from == to)
     {
         ERROR("The filter numbered %" PRIu32
@@ -298,7 +437,7 @@ void crtsExit(void)
     errno = 0;
     // We signal using just the first exit signal in the list.
     INFO("Sending signal %d to main thread", exitSignals[0]);
-    errno = pthread_kill(ThreadGroup::mainThread, exitSignals[0]);
+    errno = pthread_kill(Thread::mainThread, exitSignals[0]);
     // All we could do is try and report.
     WARN("Signal %d sent to main thread", exitSignals[0]);
 
@@ -319,6 +458,9 @@ static void badSigCatcher(int sig)
 
 static int usage(const char *argv0, const char *uopt=0)
 {
+    // This is the main thread.
+    DASSERT(pthread_equal(Thread::mainThread, pthread_self()), "");
+
     // Keep this function consistent with the argument parsing:
 
     if(uopt)
@@ -415,7 +557,10 @@ static int usage(const char *argv0, const char *uopt=0)
 // return false on success
 bool Stream::printGraph(const char *filename)
 {
-    DSPEW("Writing graph to: %s", filename);
+    // This is the main thread.
+    DASSERT(pthread_equal(Thread::mainThread, pthread_self()), "");
+
+    DSPEW("Writing DOT graph to: \"%s\"", filename);
     FILE *f;
 
     if(!filename || !filename[0])
@@ -559,8 +704,8 @@ bool Stream::printGraph(FILE *f)
             fprintf(f, "  %s [label=\"%s\n%" PRIu32 "\"];\n",
                     wNodeName,
                     filterModule->name.c_str(),
-                    (filterModule->threadGroup)?
-                        (filterModule->threadGroup->threadNum):0
+                    (filterModule->thread)?
+                        (filterModule->thread->threadNum):0
                     );
 
             for(uint32_t i = 0; i < filterModule->numReaders; ++i)
@@ -596,33 +741,67 @@ static void signalExitProgramCatcher(int sig)
 }
 
 
-static inline void finishThreadGroups(void)
+static inline void finishThreads(void)
 {
+    // Unless we wish to make this a select(2), poll(2), or epoll(2)
+    // based service.  All the source filters need to have a separate
+    // thread, because their write() calls can block waiting for data.
+    // That's just how UNIX works, assuming we don't force them to be
+    // based on non-blocking I/O, which would be too hard for our level
+    // of filter module code writers.
+    //
+    // So we made the source filters write calls never return until they
+    // have no more data, like an end of file condition.  Simple enough.
+    // This will prevent an unexpected blocking read(2) call from
+    // unintentionally completely blocking any multi-source streams.  We
+    // assume that filter module code writers are not sophisticated enough
+    // to understand how to code blocking and non-blocking read(2) calls.
+    // The parallel source inputs will just work if they are in different
+    // threads, irregardless of whither read calls are blocking or not.
+    //
+    // Broken case: if the running makes separate source filters in the
+    // same thread.  One source filter could block the other source filter
+    // from reading input data.  By default we avoid this case, but users
+    // could force this broken case to happen.
+    //
+    // If this thread default thread grouping does not work the user
+    // should specify one on the command line that will work.
+    //
     for(auto stream : Stream::streams)
+    {
         //
-        // For each stream, if there are threads, we make sure that all
-        // filter modules are part of a thread group; filter modules that
-        // were not in a thread group get put in a new thread group
-        // together, for each stream.
+        // For each stream we make sure that all filter modules are part
+        // of a thread group; filter modules that were not in a thread
+        // group get put in a new thread together.
         //
-        if(stream->threadGroups.size() > 0)
-        {
-            ThreadGroup *newThreadGroup = 0;
+        // Source filters cannot be put in the same thread as another
+        // source filter.
+        //
+        Thread *newThread = 0;
 
-            for(auto it : stream->map)
+        for(auto it : stream->map)
+        {
+            // it.second is a FilterModule
+            if(!it.second->thread)
             {
-                // it.second is a Stream
-                if(!it.second->threadGroup)
-                {
-                    if(!newThreadGroup)
-                        newThreadGroup = new ThreadGroup(stream);
-                    DSPEW("filter \"%s\" added to thread " PRIu32,
+                // It's not in a thread.
+                //
+                // Source filters cannot be put in the same thread as
+                // another source filter.
+                //
+                if(!newThread || it.second->isSource())
+                    newThread = new Thread(stream);
+
+                DSPEW("%sfilter \"%s\" added to thread %" PRIu32,
+                            (it.second->isSource())?"source ":"",
                             it.second->name.c_str(),
-                            newThreadGroup->threadNum);
-                    it.second->threadGroup = newThreadGroup;
-                }
+                            newThread->threadNum);
+
+                // Add this Filtermodule to this thread
+                it.second->thread = newThread;
             }
         }
+    }
 }
 
 
@@ -664,7 +843,7 @@ static inline int doPrint(Stream* &stream, const char *filename = 0)
             return 1; // failure
     }
 
-    finishThreadGroups();
+    finishThreads();
 
     if(Stream::printGraph(filename))
         return 1; // failure
@@ -724,7 +903,7 @@ static int parseArgs(int argc, const char **argv)
 
             ++i;
 
-            ThreadGroup *threadGroup = 0;
+            Thread *thread = 0;
 
              while(i < argc && argv[i][0] >= '0' && argv[i][0] <= '9')
              {
@@ -744,27 +923,27 @@ static int parseArgs(int argc, const char **argv)
                 FilterModule *filterModule = it->second;
 
                 DASSERT(filterModule, "");
-                DASSERT(!filterModule->threadGroup,
+                DASSERT(!filterModule->thread,
                         "filter module \"%s\" already has a thread",
                         filterModule->name.c_str());
 
-                if(filterModule->threadGroup)
+                if(filterModule->thread)
                 {
                     ERROR("filter module \"%s\" already has a thread",
                         filterModule->name.c_str());
                     return 1; // Failure
                 }
 
-                if(!threadGroup)
-                    threadGroup = new ThreadGroup(stream);
+                if(!thread)
+                    thread = new Thread(stream);
 
-                // This filterModule is a member of this group.
-                filterModule->threadGroup = threadGroup;
+                // This filterModule is a member of this thread group.
+                filterModule->thread = thread;
 
                 ++i;
             }
 
-            if(!threadGroup)
+            if(!thread)
             {
                 ERROR("At command line argument \"%s\": No "
                         "valid filter load indexes given", argv[i-1]);
@@ -772,7 +951,7 @@ static int parseArgs(int argc, const char **argv)
             }
 
 
-            // TODO: check the order of the filters in the threadGroup
+            // TODO: check the order of the filters in the thread
             // and make sure that it can work in that order...
             continue;
         }
@@ -875,12 +1054,17 @@ static int parseArgs(int argc, const char **argv)
         setDefaultStreamConnections(stream);
     }
 
-    finishThreadGroups();
+    // Figure out which filter modules have no writers, i.e. are sources.
+    for(auto stream : Stream::streams)
+        stream->getSources();
+
+    finishThreads();
 
     // TODO: Add checking of module connectivity, so that they make sense.
 
     return 0; // success
 }
+
 
 
 
@@ -940,41 +1124,62 @@ int main(int argc, const char **argv)
     // TODO: Check that connections in the stream make sense ???
     ///////////////////////////////////////////////////////////////////
 
-    // Figure out which filter modules have no writers, i.e. are sources.
+
+    ///////////////////////////////////////////////////////////////////
+    // We make sure no two sources share the same thread.
+    //
+    // A dumb user can do that via the command line.
+    //
     for(auto stream : Stream::streams)
-        stream->getSources();
+        for(auto filterModule : stream->sources)
+            // TODO: don't double search the lists.
+            for(auto filterModule2 : stream->sources)
+                if(filterModule != filterModule2 &&
+                    filterModule->thread == filterModule2->thread)
+                {
+                    ERROR("The two source filters: \"%s\" and \"%s\""
+                            " share the same thread %" PRIu32".\n\n",
+                        filterModule2->thread->threadNum,
+                        filterModule->name.c_str(),
+                        filterModule2->name.c_str());
+
+                    return 1; // error fail exit.
+                }
+    //
+    ///////////////////////////////////////////////////////////////////
 
 
-    if(ThreadGroup::createCount)
+
+    DASSERT(Thread::createCount, "");
+
     {
         // We just use this barrier once at the starting of the threads,
         // so we use this stack memory to create and use it.
         pthread_barrier_t barrier;
-        ThreadGroup::barrier = &barrier;
-        DSPEW("have %" PRIu32 " threads", ThreadGroup::createCount);
+        Thread::barrier = &barrier;
+        DSPEW("have %" PRIu32 " threads", Thread::createCount);
         ASSERT((errno = pthread_barrier_init(&barrier, 0,
-                    ThreadGroup::createCount + 1)) == 0, "");
+                    Thread::createCount + 1)) == 0, "");
 
         // Start the threads.
         for(auto stream : Stream::streams)
-            for(auto threadGroup : stream->threadGroups)
-                threadGroup->run();
+            for(auto thread : stream->threads)
+                thread->run();
 
         BARRIER_WAIT(&barrier);
         ASSERT((errno = pthread_barrier_destroy(&barrier)) == 0, "");
     }
 
+    // Testing segfault catcher by setting bad memory address
+    // to an int value.
+    //void *tret
+    //*(int *) (((uintptr_t) tret) + 0xfffffffffffffff8) = 1;
+
+
     // Now all the thread in all stream are running past there barriers,
     // so they are initialized and ready to loop.
 
-    bool isRunning = true; // local loop running flag
-
-    while(isRunning)
-    {
-#ifdef DEBUG
-        uint32_t numStreamsRunning = 0;
-#endif
-
+    
     /* NOTE: THIS IS VERY IMPORTANT
      *
 
@@ -1017,100 +1222,40 @@ int main(int argc, const char **argv)
     .                            .......
 
 
-  With threads each thread will have a stack like this which grows until it
-  hits another thread in a CRTSFilter::write() call or it hits a sink filter.
-
+  With threads each thread will have a stack like this which grows until
+  it hits another thread in a CRTSFilter::write() call or it hits a sink
+  filter.
 
      */
 
- 
-
-        isRunning = false;
-        for(auto stream : Stream::streams)
-        {
-            if(stream->isRunning)
-            {
-                for(auto source : stream->sources)
-                {
-                    // Run this source filterModule:
-                    source->write(0,0,0, source->threadGroup/*bool*/);
-
-                    // Something ran so keep it running
-                    isRunning = true;
-                }
-            }
-#ifdef DEBUG
-            ++numStreamsRunning;
-#endif
-
-        }
-#ifdef DEBUG
-        if(numStreamsRunning != Stream::streams.size())
-            SPEW("%" PRIu32 " of %" PRIu32 " streams are running");
-#endif
-    }
 
 
-    // RANT:
+    for(auto stream : Stream::streams)
+        for(auto filterModule : stream->sources)
+            // Above we checked that all source filters belong to a
+            // particular thread.
+            //
+            // TODO: If the user overrode that and put two or more source
+            // filters in the same thread than only the first source
+            // filter in the thread will work.  We should make sure no two
+            // sources share the same thread.
+            //
+            // Source filter modules will loop until they are done.  These
+            // ModuleFilter::write() calls will trigger a call to
+            // CRTSFilter::write() in their own threads.
+            filterModule->write(0,0,0, true);
+
+
+    // This is the main thread and it has nothing to do except wait.
+    Stream::wait();
+
+
+    // This will try to gracefully shutdown the stream and join the rest
+    // of the threads:
     //
-    // It'd be real nice if the UHD API would document what is thread-safe
-    // and what is not for all the API.  We can only guess how to use this
-    // stupid UHD API by looking at example codes.  From the program
-    // crashes I've seen there are clearly some things that are not thread
-    // safe, or just bad code in libuhd.
+    // TODO: But of course if any modules using libuhd it may fuck that
+    // up, and may exit when you try to gracefully shutdown.
     //
-    // The structure of the UHD API implies that you should be able to use
-    // a single uhd::usrp::multi_usrp::sptr to do both transmission and
-    // receiving but none of the example do that, the examples imply that
-    // you must make two uhd::usrp::multi_usrp::sptr objects one for
-    // (TX) transmission and one for (RX) receiving.
-
-    // register UHD message handler
-    // Let it use stdout, or stderr by default???
-    //uhd::msg::register_handler(&uhd_msg_handler);
-
-    // We do not know where UHD is thread safe, so, for now, we do this
-    // before we make threads.  The UHD examples do it this way too.
-    // We set up the usrp (RX and TX) objects in the main thread here:
-
-    // Testing segfault catcher by setting bad memory address
-    // to an int value.
-    //void *tret
-    //*(int *) (((uintptr_t) tret) + 0xfffffffffffffff8) = 1;
-
-
-
-
-    // UHD BUG WORKAROUND:
-    //
-    // We must make the two multi_usrp objects before we configure them by
-    // setting frequency, rate (bandWidth), and gain; otherwise the
-    // process exits with status 0.  And it looks like you can use the
-    // same object for both receiving (RX) and transmitting (TX).
-    // The UHD API seems to be a piece of shit in general.  Here we
-    // are keeping a list of stupid shit it does, and a good API will
-    // never do:
-    //
-    //    - calls exit; instead of throwing an exception
-    //
-    //    - spawns threads and does not tell you it does in the
-    //      documentation
-    //
-    //    - spews to stdout (we made a work-around for this)
-    //
-    //    - catches signals
-    //
-    //
-    // It may be libBOOST doing this shit...  so another thing
-    // to add to the bad things list:
-    //
-    //   - links with BOOST
-    //
-    // We sometimes get
-    // Floating point exception
-    // and the program exits
-
-
     Stream::destroyStreams();
 
     DSPEW("FINISHED");

@@ -62,7 +62,7 @@ ssize_t Stdout::write(void *buffer, size_t len, uint32_t channelNum)
     }
 
     totalOut += ret;
-    
+
     if(ret != len)
         NOTICE("fwrite(,1,%zu,crtsOut) only wrote %zu bytes", len, ret);
 
@@ -72,6 +72,8 @@ ssize_t Stdout::write(void *buffer, size_t len, uint32_t channelNum)
                 totalOut, maxOut);
         stream->isRunning = false;
     }
+
+    fflush(crtsOut);
 
     return ret;
 }
