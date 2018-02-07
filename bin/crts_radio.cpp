@@ -253,24 +253,10 @@ Stream::~Stream(void)
     for(auto tt = threads.begin();
             tt != threads.end();
             tt = threads.begin())
+        // The thread will delete all the filter modules
+        // that in-turn destroys the CRTSFilter in the filter
+        // module.
         delete *tt;
-
-    // delete the filter modules and remove them from the list (map).
-    for(auto it: map)
-    {
-        DASSERT(it.second, "");
-        // Call the module destroyer that runs in whatever magical shared
-        // object namespace without exposing the rest of the application
-        // to the symbols in the module.  Just using "delete filter" can
-        // cause major problems because of this state of affairs, and
-        // worst yet it could work most of the time, only to fail
-        // sometimes.
-        it.second->destroyFilter(it.second->filter);
-    }
-
-
-    // free up sources list memory
-    sources.clear();
 
     // Remove this from the streams list
     streams.remove(this);

@@ -55,37 +55,137 @@ FilterModule::FilterModule(Stream *stream_in, CRTSFilter *filter_in,
 
 FilterModule::~FilterModule(void)
 {
+    // TODO: This destructor just removes the connection to and from
+    // this filter module.  Should it try to make new connections to and
+    // from the remaining filter modules?
+
     // In here we'll handle the editing of the reader and writer lists
     // for both this object and the reader and writer objects.
+    //
+    // TODO: should the reader and writer arrays be turned into std::maps
+    // or something else that's easier to connect and disconnect.
     
     uint32_t i;
 
     for(i=0; i<numReaders; ++i)
     {
-        FilterModule *f = readers[i];
+        // For all reader filters that this writes to
+        FilterModule *rf = readers[i];
 
-        // Remove this module from all f->writers
-        uint32_t w;
-        for(w=0; w<f->numWriters; ++w)
+        // Better not connect to ourself.
+        DASSERT(rf != this,
+                "connected module filter to itself as a reader");
+
+        // Remove this module from all rf->writers
+        uint32_t wi; // write index
+        for(wi=0; wi < rf->numWriters; ++wi)
         {
-            if(f->writers[w] == this)
+            if(rf->writers[wi] == this)
             {
                 // Push the writers over 1 in the array
-                while(w+1<f->numWriters)
-                    f->writers[w] = f->writers[w+1];
+                uint32_t j;
+                for(j = wi + 1; j < rf->numWriters; ++j)
+                    rf->writers[j-1] = rf->writers[j];
+                --rf->numWriters;
+                if(rf->numWriters)
+                {
+                    rf->writers = (FilterModule **)
+                        realloc(rf->writers, rf->numWriters *
+                                sizeof(FilterModule *));
+                    ASSERT(rf->writers, "realloc() failed");
+                }
+                else
+                {
+                    free(rf->writers);
+                    rf->writers = 0;
+                }
+            }
+        }
+    }
+
+    for(i=0; i<numWriters; ++i)
+    {
+        // For all writer filters that this reads i.e. calls its
+        // CRTSFilter::write().
+        FilterModule *wf = writers[i];
+
+        // Better not connect to ourself.
+        DASSERT(wf != this,
+                "connected module filter to itself as writer");
+
+        // Remove this module from all wf->readers
+        uint32_t ri; // read index
+        for(ri=0; ri < wf->numReaders; ++ri)
+        {
+            if(wf->readers[ri] == this)
+            {
+                // Push the readers over 1 in the array
+                uint32_t j;
+                for(j = ri + 1; j < wf->numReaders; ++j)
+                {
+                    wf->readers[j-1] = wf->readers[j];
+                    wf->readerIndexes[j-1] = wf->readerIndexes[j];
+                }
+                --wf->numReaders;
+                if(wf->numReaders)
+                {
+                    wf->readers = (FilterModule **)
+                        realloc(wf->readers, wf->numReaders *
+                                sizeof(FilterModule *));
+                    ASSERT(wf->readers, "realloc() failed");
+                    wf->readerIndexes = (uint32_t *)
+                        realloc(wf->readerIndexes, wf->numReaders *
+                                sizeof(uint32_t));
+                    ASSERT(wf->readerIndexes, "realloc() failed");
+                 }
+                else
+                {
+                    free(wf->readers);
+                    wf->readers = 0;
+                }
             }
         }
     }
 
 
-    if(thread) thread->filterModules.remove(this);
+    if(writers)
+    {
+        free(writers);
+        writers = 0;
+    }
+    if(readers)
+    {
+        free(readers);
+        readers = 0;
+    }
+    if(readerIndexes)
+    {
+        free(readerIndexes);
+        readerIndexes = 0;
+    }
+
+    DASSERT(stream, "");
+    DASSERT(thread, "");
+    DASSERT(thread->filterModule != this,
+            "this filter module has a thread set to call its' write()");
+
+    DASSERT(filter, "");
+    DASSERT(destroyFilter, "");
+
+    thread->filterModules.remove(this);
+    
+    
+    // Call the CRTSFilter factory destructor function that we got
+    // from loading the plugin.
+    destroyFilter(filter);
+
+    stream->erase(loadIndex);
 
 
-    DSPEW("deleting filter: \"%s\"", name.c_str());
+    DSPEW("deleted filter: \"%s\"", name.c_str());
 
-    // TODO: take down connections
-
-    // TODO: free memory from realloc()
+    // The std::string name is part of the object so is automatically
+    // destroyed.
 }
 
 
@@ -132,6 +232,8 @@ void CRTSFilter::writePush(void *buffer, size_t bufferLen,
 
     if(channelNum != ALL_CHANNELS)
     {
+        if(filterModule->numReaders == 0) return;
+
         // This filter writes to the connected reader filter at
         // the channel index channelNum.
         to = filterModule->readers[channelNum];

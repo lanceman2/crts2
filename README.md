@@ -128,7 +128,6 @@ cd bin
  -f rx [ --uhd addr=192.168.10.4 --freq 915.5 ]\
  -f liquidSync\
  -f stdout\
- -t 0 -t 1 -t 2\
  -d |\
  hexdump -v"
 

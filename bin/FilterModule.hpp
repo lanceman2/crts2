@@ -16,7 +16,8 @@ class CRTSFilter;
 
 
 
-// FilterModule is the hidden parts of CRTSFilter
+// FilterModule is the hidden parts of CRTSFilter to do heavy lifting.
+//
 class FilterModule
 {
     public:
@@ -120,11 +121,21 @@ class FilterModule
         inline bool isSource(void) { return (writers?false:true); };
 
 
+
+    // TODO: could this friend mess be cleaned up?  Not easily, it would
+    // require quite a bit of refactoring.  Note: this interface is not
+    // exposed to the (user interface) CRTSFilter objects, so users will
+    // not see this mess and it can change without changing the users
+    // codes.
+
+
     friend CRTSFilter; // CRTSFilter and FilterModule are co-classes
     // (sister classes); i.e.  they share their data and methods.  We just
     // made them in two classes so that we could add code to FilterModule
     // without the users CRTSFilter inferface seeing changes to the
     // FilterModule interface.  Call it interface hiding where the
-    // FilterModule is the hidden part of CRTSFilter.
+    // FilterModule is the hidden part of CRTSFilter.  FilterModule does
+    // the heavy lifting for CRTSFilter.
+
     friend Stream;
 };
