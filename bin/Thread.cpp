@@ -87,10 +87,8 @@ static void *filterThreadWrite(Thread *thread)
         }
         // else
         //    had a filterModule already set before we first got the lock
-        //    so we will skip waiting for the signal.  This if/else
-        //    overcomes the first loop startup race condition, without the
-        //    use of a barrier or something like that.
-
+        //    so we will skip waiting for the signal.
+        //
         // Now we have the mutex lock.
 
         if(!thread->filterModule)

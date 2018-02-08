@@ -64,7 +64,30 @@ FilterModule::~FilterModule(void)
     //
     // TODO: should the reader and writer arrays be turned into std::maps
     // or something else that's easier to connect and disconnect.
-    
+    //
+    // TODO: We leave the channel numbers in the CRTSFilter::write() the
+    // same.  These channel numbers started out in sequential order as
+    // connections are added and are keep in the uint32_t
+    // FilterModule::readerIndexes[] for the FilterModule writer to
+    // write to the reader with that channel number.
+    //
+    // So if a FilterModule is removed the channel that received writes
+    // from it will no longer happen, leaving a gap in sequence of
+    // channels numbers that a reader FilterModule receives from; or
+    // should we remove this gap and shift all the channel numbers that
+    // a reader FilterModule receives from, possibly "freaking out" the
+    // reader FilterModule if it was assuming that writer channel numbers
+    // stayed in the same correspondence with filter module.
+    //
+    //
+    // TODO: maybe another abstraction layer is needed to handle
+    // FilterModule connectivity management like:
+    //
+    // CRTSFilter::write(void *buffer, size_t len, CRTSConnection *c);
+    //
+    // CRTSConnection looks like more pain for the user and developer.
+    //
+
     uint32_t i;
 
     for(i=0; i<numReaders; ++i)
