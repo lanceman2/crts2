@@ -1,3 +1,28 @@
+# In short just run:
+#
+#       source crts_radio_completion.bash
+#
+# and you get bash command line tab tab completion for the crts_radio
+# program.
+
+
+# This file can be sourced with your .bashrc file to get bash command line
+# completion for the crts_radio program.  The bash completion will at
+# least give to filter module plugin files for the plugins that you have
+# installed.  If you add filter module plugins to the filter module plugin
+# directory as "filename.so" this bash completion script will automatically
+# add the module plugin to the filter module plugin bash completion list
+# of the crts_radio program.
+
+# This could also be installed proper. See
+# https://serverfault.com/questions/506612/standard-place-for-user-defined-bash-completion-d-scripts
+# is a good place to start.
+#
+# This may just get installed automatically, but with a "non-system"
+# installation, you may need to think through how to install this.
+
+
+
 # TODO: To get bash completion for the filter modules that are installed
 # we assume that the CRTS filter plugins are in a directory that keeps a
 # fixed relative path to this file.  In the future we could parse the
@@ -14,6 +39,12 @@
 
 function _crts_radio_complete()
 {
+    # This bash file is sourced and that not the same as running it.
+    # The bash shell sourcing this needs to not get broken and polluted
+    # by this code, so we need to minimise the residual resource usage
+    # of this script.  This function only runs if the user runs
+    # crts_radio, so it's not too bad.
+
     #echo "got COMP_LINE=${COMP_LINE}  COMP_POINT=${COMP_POINT} COMP_CWORD=$COMP_CWORD"
     #set | less
     local cur_word prev_word
@@ -33,24 +64,23 @@ function _crts_radio_complete()
     fi
 
     if [[ ${prev_word} != -f ]] && [[ ${prev_word} != "--filter" ]] ; then
-        # We currently only do the filter option
+        # We currently only do the filter option and this is
+        # not that so:
         return 0 # done
     fi
 
 
-    local cwd="$PWD"
-
-    # TODO: For now we require that this bash file be in the same
-    # directory as crts_radio which is requires that filter plugins be in
-    # ../share/crts/plugins/Filters/ relative to that directory.
-
+    # TODO: For now we require that this bash file be in a special path
+    # directory which is requires that filter plugins be in
+    # ../../share/crts/plugins/Filters/ relative to the directory this
+    # file is in.
+    #
+    # This will even work when the software is not installed yet and
+    # is built in the source directory.  A major major plus for
+    # developers.
+    #
     local mod_dir="$(dirname ${BASH_SOURCE[0]})" || return 0
-    mod_dir="$mod_dir"/../share/crts/plugins/Filters/
-
-
-    cd "$mod_dir" || return 0 # We failed, oh well
-    mod_dir="$PWD"
-    cd "$cwd" || return 1 # We screwed this bash shell.
+    mod_dir="$mod_dir"/../../share/crts/plugins/Filters/
 
     local i
     local mod
