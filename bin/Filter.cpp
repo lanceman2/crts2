@@ -196,13 +196,13 @@ FilterModule::~FilterModule(void)
     DASSERT(destroyFilter, "");
 
     thread->filterModules.remove(this);
-    
-    
+
+
     // Call the CRTSFilter factory destructor function that we got
     // from loading the plugin.
     destroyFilter(filter);
 
-    stream->erase(loadIndex);
+    stream->map.erase(loadIndex);
 
 
     DSPEW("deleted filter: \"%s\"", name.c_str());

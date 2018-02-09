@@ -16,7 +16,8 @@
 #include "Buffer.hpp"
 
 
-
+// This is the pthread_create() callback function.
+//
 static void *filterThreadWrite(Thread *thread)
 {
     DASSERT(thread, "");
@@ -63,10 +64,17 @@ static void *filterThreadWrite(Thread *thread)
     // events before we have the threads ready to receive them via
     // the pointer, thread->filterModule.
     DASSERT(thread->barrier, "");
-    BARRIER_WAIT(thread->barrier);
+
+    {
+        pthread_barrier_t *barrier = thread->barrier;
+        // We zero this before the using the barrier to avoid a race.
+        thread->barrier = 0;
+        BARRIER_WAIT(barrier);
+    }
 
     // We can't have a request yet, while we hold the lock.
     DASSERT(!thread->filterModule, "");
+
 
     while(true)
     {
@@ -74,7 +82,8 @@ static void *filterThreadWrite(Thread *thread)
         {
             thread->threadWaiting = true;
             // Here we will loose the mutex lock and block waiting for a
-            // conditional signal.
+            // conditional signal.  At which time the signaler thread
+            // should be setting thread->filterModule.
             //
             // WAITING FOR SIGNAL HERE
             ASSERT((errno = pthread_cond_wait(cond, mutex)) == 0, "");
@@ -124,7 +133,7 @@ static void *filterThreadWrite(Thread *thread)
         // may be set, queued up, by another thread.
         //
         // This may be a time consuming call.
-
+        //
         filterModule->filter->write(buffer, len, channelNum);
 
 
@@ -151,6 +160,34 @@ static void *filterThreadWrite(Thread *thread)
             // buffer, len, and channelNum.
         }
 
+        if(!isRunning)
+        {
+            // A call call to filterModule->filter->write() in this
+            // or other thread unset isRunning for this stream.
+
+            // We can be a little slow here, because we are now in
+            // a shutdown state.
+            //
+            // The stream is going to be deleted soon.  When it is
+            // we will wake up from pthread_cond_wait() above and see
+            // that thread->filterModule is not set.
+            //
+            // The main thread is now waiting for all the thread in
+            // the stream to be not busy.
+            //
+            // Since the thread run asynchronously there could be
+            // unwritten data headed to this thread now, just at a
+            // different thread now.
+            //
+    
+            MUTEX_LOCK(streamsMutex);
+            if(Stream::waiting)
+                // The main thread is calling pthread_cond_wait().
+                ASSERT((errno = pthread_cond_signal(streamsCond)) == 0, "");
+            MUTEX_UNLOCK(streamsMutex);
+        }
+
+
         // Remove/free any buffers that the filterModule->filter->write()
         // created that have not been passed to another write() call, or
         // are no longer on a thread write() stack.
@@ -167,26 +204,6 @@ static void *filterThreadWrite(Thread *thread)
             if(h->useCount.fetch_sub(1) == 1)
                 freeBuffer(h);
         }
-
-
-
-        if(!isRunning)
-        {
-            // stream->isRunning only changes to false at shutdown
-            //
-            // We require that all the filters in a thread be connected
-            // in the flow.  So to shutdown a running program we can
-            // remove only source filters
-
-
-            MUTEX_LOCK(streamsMutex);
-
-            /// TODO: MORE CODE HERE 
-
-
-            MUTEX_UNLOCK(streamsMutex);
-        }
-        
     }
 
     // Let the other threads know that we are done running this thread.
@@ -199,11 +216,12 @@ static void *filterThreadWrite(Thread *thread)
     // Now signal the master/main thread.
     MUTEX_LOCK(streamsMutex);
     DASSERT(isRunning == false, "");
-    ASSERT((errno = pthread_cond_signal(streamsCond)) == 0, "");
+    if(Stream::waiting)
+        // The main thread is calling pthread_cond_wait().
+        ASSERT((errno = pthread_cond_signal(streamsCond)) == 0, "");
     MUTEX_UNLOCK(streamsMutex);
  
     DSPEW("thread %" PRIu32 " finished returning", thread->threadNum);
-
 
     return 0;
 }
@@ -260,15 +278,21 @@ Thread::~Thread()
     // TODO: until we make threads more dynamic.
     DASSERT(!stream.isRunning, "");
 
+    DASSERT(!filterModule, "");
+
     MUTEX_LOCK(&mutex);
+
+    // This thread is not busy and should be waiting
+    // on a pthread_cond_wait()
     ASSERT((errno = pthread_cond_signal(&cond)) == 0, "");
+
     MUTEX_UNLOCK(&mutex);
 
     DSPEW("waiting for thread %" PRIu32 " to join", threadNum);
 
     ASSERT((errno = pthread_join(thread, 0/*void **retval */) == 0), "");
 
-    // remove this object from the list.    
+    // remove this object from the list.
     DSPEW("Thread thread %" PRIu32 " joined", threadNum);
 
     while(filterModules.size())

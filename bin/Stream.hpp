@@ -1,5 +1,3 @@
-class Thread;
-
 // A factory of FilterModule class objects.
 // We keep a list (map) in Stream.
 //
@@ -7,9 +5,11 @@ class Thread;
 // in the order given on the crts_radio command line.
 // That load index is the map key to find the FilterModule.
 //
-class Stream : public std::map<uint32_t, FilterModule*>
+class Stream
 {
     public:
+
+        // TODO: More of this needs to be private.
 
         // number of Thread objects running this stream.
         // Added to in each Thread::Thread() call.
@@ -20,12 +20,13 @@ class Stream : public std::map<uint32_t, FilterModule*>
         // of all the sources for this stream.
         std::list<FilterModule*> sources;
 
-        // This is just a handy reference to the base class map,
-        // so it is the correct class type to access the std:map
-        // methods.  It makes some of the code less ugly.
-        std::map<uint32_t, FilterModule*> &map;
+        // The list (map) of filter modules in this Stream.
+        std::map<uint32_t, FilterModule*> map;
 
         void getSources(void);
+
+        // Finish building the default thread groupings for all streams.
+        static void finishThreads(void);
 
 
         bool load(const char *name, int argc, const char **argv);
@@ -34,6 +35,15 @@ class Stream : public std::map<uint32_t, FilterModule*>
 
         bool connect(uint32_t from, uint32_t to);
 
+
+        // This is accessible as a reference to it by the CRTSFilter
+        // objects in CRTSFilter::stream->isRunning.  The CRTSFilter can
+        // set it's value to false.  They should not set it to any other
+        // value but false.  They can also read this value in
+        // CRTSFilter::stream->isRunning.
+        //
+        // This should only be set in the users CRTSFilter code.
+        //
         std::atomic<bool> isRunning;
 
         // Stream factory
@@ -74,6 +84,7 @@ class Stream : public std::map<uint32_t, FilterModule*>
         // So we may call wait()
         static pthread_cond_t cond;
         static pthread_mutex_t mutex;
+        static bool waiting;
 
 
         // Waits until a stream and all it's threads is cleaned up.
@@ -87,14 +98,4 @@ class Stream : public std::map<uint32_t, FilterModule*>
 
         // Never decreases.  Incremented with each new FilterModule.
         uint32_t loadCount;
-
-
-        // Barrier used at stream stop.  So we know when all
-        // threads in this stream have gotten out of their running loop.
-        //
-        // TODO: use it to stop and start the stream so that the stream
-        // can be stopped edited and then started.  Currently there is a
-        // global barrier that the start all all threads in all streams.
-        //
-        pthread_barrier_t barrier;
  };
