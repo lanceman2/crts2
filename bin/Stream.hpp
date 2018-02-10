@@ -81,7 +81,7 @@ class Stream
         std::list<Thread *> threads;
 
 
-        // So we may call wait()
+        // So we may call wait() in the master/main thread.
         static pthread_cond_t cond;
         static pthread_mutex_t mutex;
         static bool waiting;

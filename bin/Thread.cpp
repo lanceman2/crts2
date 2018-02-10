@@ -31,13 +31,11 @@ static void *filterThreadWrite(Thread *thread)
     // Put some constant pointers on the stack.
     pthread_mutex_t* mutex = &(thread->mutex);
     pthread_cond_t* cond = &(thread->cond);
-    pthread_mutex_t* streamsMutex = &(Stream::mutex);
-    pthread_cond_t* streamsCond = &(Stream::cond);
 
     DASSERT(mutex, "");
     DASSERT(cond, "");
-    DASSERT(streamsMutex, "");
-    DASSERT(streamsCond, "");
+    DASSERT(&Stream::mutex, "");
+    DASSERT(&Stream::cond, "");
 
 
     // These variables will change at every loop:
@@ -55,7 +53,6 @@ static void *filterThreadWrite(Thread *thread)
     DSPEW("thread %" PRIu32 " starting", thread->threadNum);
 
     DASSERT(!thread->filterModule, "");
-
 
     // Now that we have the threads mutex lock we can wait for all
     // the threads and the main thread to be in an "initialized" state.
@@ -76,22 +73,15 @@ static void *filterThreadWrite(Thread *thread)
     DASSERT(!thread->filterModule, "");
 
 
+
     while(true)
     {
         if(!thread->filterModule)
         {
             thread->threadWaiting = true;
-            // Here we will loose the mutex lock and block waiting for a
-            // conditional signal.  At which time the signaler thread
-            // should be setting thread->filterModule.
-            //
             // WAITING FOR SIGNAL HERE
             ASSERT((errno = pthread_cond_wait(cond, mutex)) == 0, "");
             // Now we have the mutex lock again.
-            //
-            // By the time another thread (or this thread) gets this
-            // threads mutex lock again this thread will be calling
-            // the CTRSFilter::write().
             thread->threadWaiting = false;
         }
         // else
@@ -180,11 +170,11 @@ static void *filterThreadWrite(Thread *thread)
             // different thread now.
             //
     
-            MUTEX_LOCK(streamsMutex);
+            MUTEX_LOCK(&Stream::mutex);
             if(Stream::waiting)
                 // The main thread is calling pthread_cond_wait().
-                ASSERT((errno = pthread_cond_signal(streamsCond)) == 0, "");
-            MUTEX_UNLOCK(streamsMutex);
+                ASSERT((errno = pthread_cond_signal(&Stream::cond)) == 0, "");
+            MUTEX_UNLOCK(&Stream::mutex);
         }
 
 
@@ -214,12 +204,12 @@ static void *filterThreadWrite(Thread *thread)
     MUTEX_UNLOCK(mutex);
 
     // Now signal the master/main thread.
-    MUTEX_LOCK(streamsMutex);
+    MUTEX_LOCK(&Stream::mutex);
     DASSERT(isRunning == false, "");
     if(Stream::waiting)
         // The main thread is calling pthread_cond_wait().
-        ASSERT((errno = pthread_cond_signal(streamsCond)) == 0, "");
-    MUTEX_UNLOCK(streamsMutex);
+        ASSERT((errno = pthread_cond_signal(&Stream::cond)) == 0, "");
+    MUTEX_UNLOCK(&Stream::mutex);
  
     DSPEW("thread %" PRIu32 " finished returning", thread->threadNum);
 

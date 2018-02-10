@@ -7,6 +7,7 @@
 #include <sys/types.h>
 #include <string.h>
 #include <stdio.h>
+#include <time.h>
 #include <pthread.h>
 #include <inttypes.h>
 #include <map>
@@ -189,16 +190,87 @@ Stream::~Stream(void)
 
     // Now we wait to all the threads to be in the pthread_cond_wait()
     // call in filterThreadWrite() callback.
-    // If all threads have thread->filterModule unset this is the case.
+    //
+    // The checking that all threads are waiting has to be possible.
+    // Threads can be woken and put to sleep while we at doing this check,
+    // so we must have another stinking flag that makes all the threads
+    // know that we are in "shutdown mode" which is where we add the main
+    // thread mutex locking and unlocking to all the threads
+    // pthread_cond_wait() calls in the filterThreadWrite() call.
+    //
+
+
+    while(true)
+    {
+        bool threadNotWaiting = false;
+
+        // TODO: In general it is usually found that using sleep is the
+        // sign of a design flaw.
+
+        // Search all Threads in the stream.
+        //
+        // First get a lock of all the threads, crazy but we must
+        // otherwise we would could have one changing the waiting flag
+        // which looking at another thread waiting flag.
+        for(auto tt = threads.begin();
+                tt != threads.end();
+                tt = threads.begin())
+            MUTEX_LOCK(&(*tt)->mutex);
+
+        // Second check if any waiting flag is not set.
+        for(auto tt = threads.begin();
+                tt != threads.end();
+                tt = threads.begin())
+            if(!(*tt)->threadWaiting)
+            {
+                threadNotWaiting = true;
+                break;
+            }
+    
+        // Third unlock all the thread mutexes
+        for(auto tt = threads.begin();
+                tt != threads.end();
+                tt = threads.begin())
+            MUTEX_UNLOCK(&(*tt)->mutex);
+
+        if(threadNotWaiting)
+        {
+            // We thought this sleeping when in this transit flush mode
+            // was better than adding another stupid flag that all the
+            // threads would have to look at in every loop when in a
+            // non-transit state.  This keeps the worker thread loops
+            // simpler.
+            struct timespec t { 0/* seconds */, 10000 /*nano seconds*/};
+            // If nanosleep fails it does not matter there's nothing we 
+            // could do about it anyway.  A signal could make it fail.
+            nanosleep(&t, 0);
+        }
+        else
+            // All threads are calling pthread_cond_wait() in
+            // filterThreadWrite() no other thread is coded to
+            // signal and wake them, so we can assume that they
+            // are all under this main threads control now.
+            break;
+    }
+
+
+    // NOW: All Threads in this stream should be in pthread_cond_wait() in
+    // filterThreadWrite().
 
 
     for(auto tt = threads.begin();
-            tt != threads.end();
-            tt = threads.begin())
+        tt != threads.end();
+        tt = threads.begin())
     {
-        Thread *thread = *tt;
-        HERE ..........
+        MUTEX_LOCK(&(*tt)->mutex);
+        // They should not have any requests.
+        DASSERT(!(*tt)->filterModule, "");
+        ASSERT((errno = pthread_cond_signal(&(*tt)->cond)) == 0, "");
+        MUTEX_UNLOCK(&(*tt)->mutex);
     }
+
+    // Now all the thread in this stream should be heading toward
+    // return 0.
 
     // The thread destructor removes itself from the
     // threads list.

@@ -80,7 +80,6 @@ class Thread
         //
         Stream &stream;
 
-
         // At each loop we may reset the buffer, len, and channel
         // to call filterModule->filter->write(buffer, len, channel);
 
@@ -119,6 +118,7 @@ class Thread
         // this flags adds huge resource savings.
         //
         bool threadWaiting; // thread calling pthread_cond_wait()
+
 
 
         // All the filter modules that this thread can call

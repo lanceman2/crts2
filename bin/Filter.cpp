@@ -316,7 +316,7 @@ void CRTSFilter::releaseBuffer(void *buffer)
     // CRTSFilter::write();
     //
     // TODO: WRITE THIS FUNCTION  This may require adding move meta variables
-    // to the buffer.
+    // to the buffer.  One might ask what is the point of this function...
 
 }
 
