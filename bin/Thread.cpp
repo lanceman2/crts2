@@ -62,12 +62,7 @@ static void *filterThreadWrite(Thread *thread)
     // the pointer, thread->filterModule.
     DASSERT(thread->barrier, "");
 
-    {
-        pthread_barrier_t *barrier = thread->barrier;
-        // We zero this before the using the barrier to avoid a race.
-        thread->barrier = 0;
-        BARRIER_WAIT(barrier);
-    }
+    BARRIER_WAIT(thread->barrier);
 
     // We can't have a request yet, while we hold the lock.
     DASSERT(!thread->filterModule, "");
@@ -270,20 +265,29 @@ Thread::~Thread()
 
     DASSERT(!filterModule, "");
 
-    MUTEX_LOCK(&mutex);
+    // If there is not barrier set than there never was a thread.
+    if(barrier)
+    {
+        MUTEX_LOCK(&mutex);
 
-    // This thread is not busy and should be waiting
-    // on a pthread_cond_wait()
-    ASSERT((errno = pthread_cond_signal(&cond)) == 0, "");
+        // This thread is not busy and should be waiting
+        // on a pthread_cond_wait()
+        ASSERT((errno = pthread_cond_signal(&cond)) == 0, "");
 
-    MUTEX_UNLOCK(&mutex);
+        MUTEX_UNLOCK(&mutex);
 
-    DSPEW("waiting for thread %" PRIu32 " to join", threadNum);
+        DSPEW("waiting for thread %" PRIu32 " to join", threadNum);
 
-    ASSERT((errno = pthread_join(thread, 0/*void **retval */) == 0), "");
+        ASSERT((errno = pthread_join(thread, 0/*void **retval */) == 0), "");
 
-    // remove this object from the list.
-    DSPEW("Thread thread %" PRIu32 " joined", threadNum);
+        // remove this object from the list.
+        DSPEW("Thread %" PRIu32 " joined", threadNum);
+    }
+#ifdef DEBUG
+    else
+        DSPEW("Thread %" PRIu32 " never ran", threadNum);
+#endif
+
 
     while(filterModules.size())
         // FilterModule::~FilterModule(void) will remove it.

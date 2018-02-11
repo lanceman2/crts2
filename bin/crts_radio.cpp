@@ -499,6 +499,9 @@ int main(int argc, const char **argv)
         //
         // There should be not much go'n yet just filter modules
         // loaded.  We just need to call their factory destructor's.
+        for(auto stream : Stream::streams)
+            // Flag the streams as not running in regular mode.
+            stream->isRunning = false;
 
         Stream::destroyStreams();
 

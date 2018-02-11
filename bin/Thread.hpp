@@ -70,7 +70,8 @@ class Thread
         static uint32_t createCount;
 
         static pthread_t mainThread;
- 
+
+        // This barrier gets passed at launch().
         pthread_barrier_t *barrier;
 
         // stream is the fixed/associated Stream which contains all filter

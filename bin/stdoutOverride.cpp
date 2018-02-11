@@ -38,7 +38,7 @@ static FILE *stdoutOverride(void)
 {
     FILE *crtsOut;
 
-    fprintf(stderr, "%s:%d: calling %s()\n", __FILE__, __LINE__, __func__);
+    //fprintf(stderr, "%s:%d: calling %s()\n", __FILE__, __LINE__, __func__);
 
     // When this is called we assume that there has been no data written
     // to the stdout stream or stdout file descriptor.  We need to setup a
@@ -74,7 +74,7 @@ static FILE *stdoutOverride(void)
     // We can now write to crtsOut to write to what appears as stdout in a
     // bash pipe line.
 
-#if 1 // testing crtsOut
+#if 0 // testing crtsOut
     fprintf(crtsOut, "crtsOut %s:%d: calling %s()\n", __FILE__, __LINE__, __func__);
     fflush(crtsOut);
 #endif

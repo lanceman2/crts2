@@ -447,9 +447,6 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
             ASSERT((errno = pthread_cond_wait(&cond, &mutex)) == 0, "");
             // Now we have the mutex lock again.
             
-            // TODO: the stream may not be running at this point ........
-            // ............. MORE CODE HERE?
-            //
 
             MUTEX_LOCK(&thread->mutex);
 

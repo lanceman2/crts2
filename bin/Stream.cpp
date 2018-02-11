@@ -179,6 +179,7 @@ Stream::Stream(void):
 
 Stream::~Stream(void)
 {
+    DSPEW();
     // This is the main thread.
     DASSERT(pthread_equal(Thread::mainThread, pthread_self()), "");
 
@@ -199,8 +200,11 @@ Stream::~Stream(void)
     // pthread_cond_wait() calls in the filterThreadWrite() call.
     //
 
+    bool haveRunningThreads =
+        (threads.begin() != threads.end() && (*(threads.begin()))->barrier);
 
-    while(true)
+
+    while(haveRunningThreads)
     {
         bool threadNotWaiting = false;
 
@@ -212,15 +216,11 @@ Stream::~Stream(void)
         // First get a lock of all the threads, crazy but we must
         // otherwise we would could have one changing the waiting flag
         // which looking at another thread waiting flag.
-        for(auto tt = threads.begin();
-                tt != threads.end();
-                tt = threads.begin())
+        for(auto tt = threads.begin(); tt != threads.end(); ++tt)
             MUTEX_LOCK(&(*tt)->mutex);
 
         // Second check if any waiting flag is not set.
-        for(auto tt = threads.begin();
-                tt != threads.end();
-                tt = threads.begin())
+        for(auto tt = threads.begin(); tt != threads.end(); ++tt)
             if(!(*tt)->threadWaiting)
             {
                 threadNotWaiting = true;
@@ -228,9 +228,7 @@ Stream::~Stream(void)
             }
     
         // Third unlock all the thread mutexes
-        for(auto tt = threads.begin();
-                tt != threads.end();
-                tt = threads.begin())
+        for(auto tt = threads.begin(); tt != threads.end(); ++tt)
             MUTEX_UNLOCK(&(*tt)->mutex);
 
         if(threadNotWaiting)
@@ -257,17 +255,16 @@ Stream::~Stream(void)
     // NOW: All Threads in this stream should be in pthread_cond_wait() in
     // filterThreadWrite().
 
+    if(haveRunningThreads)
+        for(auto tt = threads.begin(); tt != threads.end(); ++tt)
+        {
+            MUTEX_LOCK(&(*tt)->mutex);
+            // The thread should not have any requests.
+            DASSERT(!(*tt)->filterModule, "");
 
-    for(auto tt = threads.begin();
-        tt != threads.end();
-        tt = threads.begin())
-    {
-        MUTEX_LOCK(&(*tt)->mutex);
-        // They should not have any requests.
-        DASSERT(!(*tt)->filterModule, "");
-        ASSERT((errno = pthread_cond_signal(&(*tt)->cond)) == 0, "");
-        MUTEX_UNLOCK(&(*tt)->mutex);
-    }
+            ASSERT((errno = pthread_cond_signal(&(*tt)->cond)) == 0, "");
+            MUTEX_UNLOCK(&(*tt)->mutex);
+        }
 
     // Now all the thread in this stream should be heading toward
     // return 0.
