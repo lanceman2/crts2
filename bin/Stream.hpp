@@ -58,7 +58,7 @@ class Stream
         // Print a DOT graph file that represents all the streams
         // in the streams list.  Prints a PNG file if filename
         // ends in ".png".
-        static bool printGraph(const char *filename = 0);
+        static bool printGraph(const char *filename = 0, bool _wait=true);
 
 
         // It removes itself from the streams list

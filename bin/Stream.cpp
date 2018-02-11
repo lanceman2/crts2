@@ -219,14 +219,21 @@ Stream::~Stream(void)
         for(auto tt = threads.begin(); tt != threads.end(); ++tt)
             MUTEX_LOCK(&(*tt)->mutex);
 
-        // Second check if any waiting flag is not set.
+        // Second check if threads are not waiting or have a request.
         for(auto tt = threads.begin(); tt != threads.end(); ++tt)
-            if(!(*tt)->threadWaiting)
+            if(!(*tt)->threadWaiting
+                    ||
+                    (*tt)->filterModule/*= have a request*/)
             {
                 threadNotWaiting = true;
                 break;
             }
-    
+
+        // If we made it through the above block than all threads are
+        // waiting in pthread_cond_wait() and none of them have a
+        // request queued.
+
+
         // Third unlock all the thread mutexes
         for(auto tt = threads.begin(); tt != threads.end(); ++tt)
             MUTEX_UNLOCK(&(*tt)->mutex);
@@ -260,7 +267,8 @@ Stream::~Stream(void)
         {
             MUTEX_LOCK(&(*tt)->mutex);
             // The thread should not have any requests.
-            DASSERT(!(*tt)->filterModule, "");
+            DASSERT(!(*tt)->filterModule, "thread %" PRIu32 " has a "
+                    "write request queued", (*tt)->threadNum);
 
             ASSERT((errno = pthread_cond_signal(&(*tt)->cond)) == 0, "");
             MUTEX_UNLOCK(&(*tt)->mutex);
@@ -417,12 +425,13 @@ bool Stream::connect(uint32_t from, uint32_t to)
 //
 // Print a DOT graph to filename or PNG image of a directed graph
 // return false on success
-bool Stream::printGraph(const char *filename)
+bool Stream::printGraph(const char *filename, bool _wait)
 {
     // This is the main thread.
     DASSERT(pthread_equal(Thread::mainThread, pthread_self()), "");
 
     DSPEW("Writing DOT graph to: \"%s\"", filename);
+
     FILE *f;
 
     if(!filename || !filename[0])
@@ -470,14 +479,18 @@ bool Stream::printGraph(const char *filename)
             // I'm the parent
             fclose(f);
 
-            int status = 0;
-            INFO("waiting for child display process", status);
-            errno = 0;
-            // We wait for just this child.
-            if(pid == waitpid(pid, &status, 0))
-                INFO("child display process return status %d", status);
-            else
-                WARN("child display process gave a wait error");
+            if(_wait)
+            {
+                int status = 0;
+                INFO("waiting for child display process", status);
+                errno = 0;
+                // We wait for just this child.
+                if(pid == waitpid(pid, &status, 0))
+                    INFO("child display process return status %d",
+                            status);
+                else
+                    WARN("child display process gave a wait error");
+            }
         }
         else
         {
@@ -529,6 +542,7 @@ bool Stream::printGraph(const char *filename)
 }
 
 
+// This just writes DOT content to the file with no other options.
 bool Stream::printGraph(FILE *f)
 {
     DASSERT(f, "");
@@ -539,7 +553,8 @@ bool Stream::printGraph(FILE *f)
             "// This is a generated file\n"
             "\n"
             "// This is a DOT graph file.  See:\n"
-            "//  https://en.wikipedia.org/wiki/DOT_(graph_description_language)\n"
+            "//  https://en.wikipedia.org/wiki/DOT_"
+            "(graph_description_language)\n"
             "\n"
             "// There are %zu filter streams in this graph.\n"
             "\n", Stream::streams.size()
@@ -563,7 +578,7 @@ bool Stream::printGraph(FILE *f)
                     filterModule->loadIndex);
 
             // example f0_1 [label="stdin(0)\n1"] for thread 1
-            fprintf(f, "  %s [label=\"%s\n%" PRIu32 "\"];\n",
+            fprintf(f, "  %s [label=\"%s\nthread %" PRIu32 "\"];\n",
                     wNodeName,
                     filterModule->name.c_str(),
                     (filterModule->thread)?

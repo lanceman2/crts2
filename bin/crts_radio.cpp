@@ -83,7 +83,7 @@ static int usage(const char *argv0, const char *uopt=0)
     // Keep this function consistent with the argument parsing:
 
     if(uopt)
-        printf("\n Unknown option: %s\n\n\n", uopt);
+        printf("\n Bad option: %s\n\n\n", uopt);
 
     printf(
         "\n"
@@ -122,21 +122,27 @@ static int usage(const char *argv0, const char *uopt=0)
 "\n"
 "                                    connect from filter 0 to filter 1 and from\n"
 "                                    filter 1 to filter 2.  This option must\n"
-"                                    follow all the corresponding FILTER options\n"
-"                                    Arguments follow a connection LIST will be\n"
-"                                    in a new Stream.  After this option and next\n"
+"                                    follow all the corresponding FILTER options.\n"
+"                                    Arguments follow a connection LIST will be in\n"
+"                                    a new Stream.  After this option and next\n"
 "                                    filter option with be in a new different stream\n"
 "                                    and the filter indexes will be reset back to 0.\n"
 "                                    If a connect option is not given after an\n"
 "                                    uninterrupted list of filter options than a\n"
 "                                    default connectivity will be setup that connects\n"
-"                                    all adjacent filters.\n"
+"                                    all adjacent filters in a single line.\n"
 "\n"
 "\n"
 "   -d | --display                   display a DOT graph via dot and imagemagick\n"
-"                                    display program, before running the streams.\n"
-"                                    This option should be after filter options in\n"
-"                                    the command line.  Maybe make it the last option.\n"
+"                                    display program, before continuing to the next\n"
+"                                    command line options.  This option should be\n"
+"                                    after filter options in the command line.  Maybe\n"
+"                                    make it the last option.\n"
+"\n"
+"\n"
+"   -D | --Display                   same as option -d but %s will not be\n"
+"                                    blocked waiting for the imagemagick display\n"
+"                                    program to exit.\n"
 "\n"
 "\n"
 "   -e | --exit                      exit the program.  Used if you just want to\n"
@@ -152,7 +158,6 @@ static int usage(const char *argv0, const char *uopt=0)
 "   -h | --help                      print this help and exit\n"
 "\n"
 "\n"
-
 "   -p | --print FILENAME            print a DOT graph to FILENAME.  This should be\n"
 "                                    after all filter options in the command line.  If\n"
 "                                    FILENAME ends with .png this will write a PNG\n"
@@ -163,7 +168,7 @@ static int usage(const char *argv0, const char *uopt=0)
 "                                   Without this argument option the program will run\n"
 "                                   all filters modules in a single thread.\n"
 "\n"
-"\n");
+"\n", argv0);
 
     return 1; // return error status
 }
@@ -211,7 +216,8 @@ static int setDefaultStreamConnections(Stream* &stream)
 
 // We happened to have more than one command line option that prints a DOT
 // graph. So we put common code here to keep things consistent.
-static inline int doPrint(Stream* &stream, const char *filename = 0)
+static inline int doPrint(Stream* &stream, const char *filename = 0,
+        bool _wait = true)
 {
     if(stream)
     {
@@ -223,7 +229,7 @@ static inline int doPrint(Stream* &stream, const char *filename = 0)
     // Finish building the default thread groupings for all streams.
     Stream::finishThreads();
 
-    if(Stream::printGraph(filename))
+    if(Stream::printGraph(filename, _wait))
         return 1; // failure
 
     return 0; // success
@@ -295,7 +301,7 @@ static int parseArgs(int argc, const char **argv)
                 auto it = stream->map.find(fi);
                 if(it == stream->map.end())
                 {
-                    ERROR("Bad filter index: %" PRIu32, fi);
+                    ERROR("Bad filter index options: %s %" PRIu32, argv[i-1], fi);
                     return usage(argv[0], argv[i-1]);
                 }
                 FilterModule *filterModule = it->second;
@@ -394,6 +400,7 @@ static int parseArgs(int argc, const char **argv)
 
         if(get_opt(str, Argc, Argv, "-p", "--print", argc, argv, i))
         {
+            // This case will have a filename picked out.
             if(doPrint(stream, str.c_str()))
                 return 1; // error
             continue;
@@ -402,7 +409,19 @@ static int parseArgs(int argc, const char **argv)
         if(!strcmp("-d", argv[i]) || !strcmp("--display", argv[i]))
         {
             ++i;
+            // This case will not have a filename so it will
+            // use a tmp file and automatically remove it.
             if(doPrint(stream, str.c_str()))
+                return 1; // error
+            continue;
+        }
+
+        if(!strcmp("-D", argv[i]) || !strcmp("--Display", argv[i]))
+        {
+            ++i;
+            // This case will not have a filename so it will
+            // use a tmp file and automatically remove it.
+            if(doPrint(stream, str.c_str(), false/*do not wait*/))
                 return 1; // error
             continue;
         }

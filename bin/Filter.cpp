@@ -446,7 +446,7 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
             // We release the mutex lock and wait:
             ASSERT((errno = pthread_cond_wait(&cond, &mutex)) == 0, "");
             // Now we have the mutex lock again.
-            
+
 
             MUTEX_LOCK(&thread->mutex);
 
