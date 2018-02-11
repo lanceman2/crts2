@@ -86,7 +86,8 @@ static void *filterThreadWrite(Thread *thread)
         // Now we have the mutex lock.
 
         if(!thread->filterModule)
-            // There is no request so this is just a signal to return.
+            // There is no request so this is just a signal to return;
+            // this threads work is done.
             break;
 
         // The filter module and what is written may change in each loop.
