@@ -2,7 +2,7 @@
 #include <unistd.h>
 #include <stdbool.h>
 
-#include "crts/crts.h"
+#include "crts/crts.hpp"
 #include "crts/debug.h"
 
 // This gets called before we can know whither or not we really need to do
@@ -42,9 +42,8 @@ static FILE *stdoutOverride(void)
 
     // When this is called we assume that there has been no data written
     // to the stdout stream or stdout file descriptor.  We need to setup a
-    // new file descriptor to catch the stdout stream data from the
-    // fucking stupid libuhd.so library and send it to the stderr file
-    // descriptor.
+    // new file descriptor to catch the stdout stream data from the stupid
+    // libuhd.so library and send it to the stderr file descriptor.
 
     // playing dup games requires that we know what STDOUT_FILENO is and
     // etc.

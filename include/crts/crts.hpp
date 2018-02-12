@@ -1,5 +1,5 @@
-#ifndef __crts_h__
-#define __crts_h__
+#ifndef __crts_hpp__
+#define __crts_hpp__
 
 #include <stdio.h>
 #include <string.h>
@@ -10,9 +10,15 @@
 #define CRTSFILTER_NAME(buf, len)   getModuleName(buf, len, __BASE_FILE__)
 
 
+extern bool crtsRequireModule(const char *name,
+        int argc = 0, const char **argv = 0);
+
+
+
 #ifdef __cplusplus
 extern "C" {
 #endif
+    
 
 
 // Thread safe.
@@ -53,4 +59,4 @@ extern FILE *crtsOut;
 #endif
 
 
-#endif //#ifndef __crts_h__
+#endif //#ifndef __crts_hpp__

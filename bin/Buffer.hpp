@@ -1,8 +1,26 @@
 
+// Comment this #define BUFFER_DEBUG out to not add extra debugging code.
+#define BUFFER_DEBUG
+
+
+#ifdef BUFFER_DEBUG
+// Stuff to check for memory leaks in our buffering system:
+//
+extern pthread_mutex_t bufferDBMutex;
+extern uint64_t bufferDBNum; // Number of buffers that exist
+extern uint64_t bufferDBMax; // max Number of buffers that existed
+#endif
+
+
+
 struct Header
 {
+#ifdef BUFFER_DEBUG
+    uint64_t count;
+#endif
+
 #ifdef DEBUG
-    uint64_t magic;
+    uint64_t magic; // So we can see it's one of ours a free time.
 #endif
 
     // If there are threads then this
@@ -97,6 +115,7 @@ struct Buffer
 static inline void freeBuffer(struct Header *h)
 {
     DASSERT(h, "");
+
 #ifdef DEBUG
     DASSERT(h->magic == MAGIC, "Bad memory pointer");
     DASSERT(h->len > 0, "");
@@ -104,11 +123,15 @@ static inline void freeBuffer(struct Header *h)
     memset(h, 0, h->len);
 #endif
 
-    // Making sure that buffers are cleaned up.
-    // This will spew too much to leave uncommented.
-    //WARN("freeing buffer=%p", h);
-
     free(h);
+
+#ifdef BUFFER_DEBUG
+    MUTEX_LOCK(&bufferDBMutex);
+    --bufferDBNum;
+    NOTICE("freeing buffer(%" PRIu64 ") =%p", bufferDBNum,  h);
+
+    MUTEX_UNLOCK(&bufferDBMutex);
+#endif
 }
 
 

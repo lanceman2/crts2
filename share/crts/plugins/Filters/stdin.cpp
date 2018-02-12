@@ -80,6 +80,13 @@ ssize_t Stdin::write(void *buffer, size_t len, uint32_t channelNum)
         if(ret > 0)
             // Send this buffer to the next readers write call.
             writePush(buffer, ret, ALL_CHANNELS);
+
+        // Check if any of our allocated buffers need freeing.  They may
+        // be in use in another thread, or not, so we free it now or after
+        // the other thread finishes with it.  That's what happens in
+        // asynchronous multithreaded programs.  Since this function may
+        // never return we must stop memory from leaking here.
+        releaseBuffers();
     }
 
     return 1;

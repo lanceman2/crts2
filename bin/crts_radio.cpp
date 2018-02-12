@@ -798,7 +798,7 @@ int main(int argc, const char **argv)
     // This will try to gracefully shutdown the stream and join the rest
     // of the threads:
     //
-    // TODO: But of course if any modules are using libuhd it may fuck
+    // TODO: But of course if any modules are using libuhd it may mess
     // that up, and may exit when you try to gracefully shutdown.
     //
     Stream::destroyStreams();

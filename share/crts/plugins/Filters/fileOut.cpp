@@ -4,23 +4,21 @@
 
 #include "crts/debug.h"
 #include "crts/Filter.hpp"
-#include "crts/crts.h" // for:  FILE *crtsOut
+#include "crts/crts.hpp" // for:  FILE *crtsOut
 
 
-class File : public CRTSFilter
+class FileOut : public CRTSFilter
 {
     public:
 
-        File(int argc, const char **argv);
-        ~File(void);
+        FileOut(int argc, const char **argv);
+        ~FileOut(void);
 
         ssize_t write(void *buffer, size_t bufferLen, uint32_t channelNum);
 
     private:
 
         FILE *file;
-        const char *filename;
-
 };
 
 
@@ -34,7 +32,8 @@ static void usage(void)
     char name[64];
     fprintf(crtsOut, "Usage: %s [ OUT_FILENAME ]\n"
             "\n"
-            "  The option OUT_FILENAME is optional.\n"
+            "  The option OUT_FILENAME is optional.  The default\n"
+            "  output file is something like stdout.\n"
             "\n"
             "\n"
             , CRTSFILTER_NAME(name, 64));
@@ -44,49 +43,48 @@ static void usage(void)
 }
 
 
-File::File(int argc, const char **argv): file(0), filename("crts_file.txt")
+FileOut::FileOut(int argc, const char **argv): file(0)
 {
+    const char *filename = 0;
     DSPEW();
-#ifdef DEBUG // TODO: remove this DEBUG SPEW
-    DSPEW("  GOT ARGS");
-    for(int i=0; i<argc; ++i)
-        DSPEW("    ARG[%d]=\"%s\"", i, argv[i]);
-    DSPEW();
-#endif
 
     if(argc > 1 || (argc == 1 && argv[0][0] == '-'))
         usage();
     else if(argc == 1)
         filename = argv[0];
 
-    file = fopen(filename, "a");
-    if(!file)
+    if(filename)
     {
-        std::string str("fopen(\"");
-        str += filename;
-        str += "\") failed";
-        // This is how return an error from a C++ constructor
-        // the module loader with catch this throw.
-        throw str;
+        file = fopen(filename, "a");
+        if(!file)
+        {
+            std::string str("fopen(\"");
+            str += filename;
+            str += "\", \"a\") failed";
+            // This is how return an error from a C++ constructor
+            // the module loader with catch this throw.
+            throw str;
+        }
+        INFO("opened file: %s", filename);
     }
+    else
+        file = crtsOut; // like stdout but not polluted by libuhd
 
     DSPEW();
 }
 
 
-File::~File(void)
+FileOut::~FileOut(void)
 {
-    if(file)
-    {
+    if(file && file != crtsOut)
         fclose(file);
-        file = 0;
-    }
+    file = 0;
 
     DSPEW();
 }
 
 
-ssize_t File::write(void *buffer, size_t len, uint32_t channelNum)
+ssize_t FileOut::write(void *buffer, size_t len, uint32_t channelNum)
 {
     DASSERT(buffer, "");
     DASSERT(len, "");
@@ -114,4 +112,4 @@ ssize_t File::write(void *buffer, size_t len, uint32_t channelNum)
 
 
 // Define the module loader stuff to make one of these class objects.
-CRTSFILTER_MAKE_MODULE(File)
+CRTSFILTER_MAKE_MODULE(FileOut)

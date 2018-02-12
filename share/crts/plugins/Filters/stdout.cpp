@@ -2,7 +2,7 @@
 
 #include "crts/debug.h"
 #include "crts/Filter.hpp"
-#include "crts/crts.h" // for:  FILE *crtsOut in place of stdout
+#include "crts/crts.hpp" // for:  FILE *crtsOut in place of stdout
 
 #define DBDELETE
 

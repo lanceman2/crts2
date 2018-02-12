@@ -6,7 +6,7 @@
 
 #include "crts/debug.h"
 #include "crts/Filter.hpp"
-#include "crts/crts.h" // for:  FILE *crtsOut
+#include "crts/crts.hpp" // for:  FILE *crtsOut
 
 #include "usrp_set_parameters.hpp" // UHD usrp wrappers
 #include "defaultUSRP.hpp" // defaults: RX_FREQ, RX_RATE, RX_GAIN
@@ -304,6 +304,13 @@ ssize_t Rx::write(void *buffer_in, size_t len, uint32_t channelNum)
         if(numSamples > 0)
             writePush(buffer, numSamples*sizeof(std::complex<float>),
                     CRTSFilter::ALL_CHANNELS);
+
+        // Check if any of our allocated buffers need freeing.  They may
+        // be in use in another thread, or not, so we free it now or after
+        // the other thread finishes with it.  That's what happens in
+        // asynchronous multithreaded programs.  Since this function may
+        // never return we must stop memory from leaking here.
+        releaseBuffers();
     }
 
     return 1; // TODO: what to return????

@@ -6,7 +6,7 @@
 
 #include "crts/debug.h"
 #include "crts/Filter.hpp"
-#include "crts/crts.h" // for:  FILE *crtsOut
+#include "crts/crts.hpp" // for:  FILE *crtsOut
 
 #include "usrp_set_parameters.hpp" // UHD usrp wrappers
 #include "defaultUSRP.hpp" // defaults: TX_FREQ, TX_RATE, TX_GAIN

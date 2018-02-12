@@ -223,7 +223,7 @@ class CRTSFilter
         void *getBuffer(size_t bufferLen);
 
 
-        // releaseBuffer() is not required to be called.  It is used to
+        // releaseBuffers() is not required to be called.  It is used to
         // free up the buffer that may be being accessed in another thread
         // where by freeing up contention between threads that is
         // associated with the sharing of buffers between threads.  You
@@ -232,10 +232,10 @@ class CRTSFilter
         // take a while and it will not access (read or write) to the
         // buffer again in that call to CRTSFilter::write().
         //
-        // What releaseBuffer() does is depends on filter module
+        // What releaseBuffers() does is depends on filter module
         // connection topology and thread grouping.  Using it may or may
         // not make the stream run faster.  It just depends.
-        void releaseBuffer(void *buffer);
+        void releaseBuffers(void);
 
         // Releases a buffer lock if this module has a different thread
         // than the module that wrote to this module.  The module may

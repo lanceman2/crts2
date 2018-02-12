@@ -284,6 +284,15 @@ void CRTSFilter::writePush(void *buffer, size_t bufferLen,
 }
 
 
+#ifdef BUFFER_DEBUG
+// Stuff to check for memory leaks in our buffering system:
+//
+pthread_mutex_t bufferDBMutex = PTHREAD_MUTEX_INITIALIZER;
+uint64_t bufferDBNum = 0; // Number of buffers that exist
+uint64_t bufferDBMax = 0; // max Number of buffers that existed
+#endif
+
+
 
 // This is called in CTRSFilter::write() to create a new buffer
 // that is automatically cleaned up at the end of it's use.
@@ -297,6 +306,21 @@ void *CRTSFilter::getBuffer(size_t bufferLen)
 #endif
     buf->header.len = bufferLen;
     buf->header.useCount = 1;
+
+#ifdef BUFFER_DEBUG
+    MUTEX_LOCK(&bufferDBMutex);
+    ++bufferDBNum;
+
+    if(bufferDBNum > bufferDBMax)
+    {
+        // If this keeps growing we want to know.
+        NOTICE("We now have %" PRIu64 " buffers", bufferDBNum);
+        bufferDBMax = bufferDBNum;
+    }
+
+    MUTEX_UNLOCK(&bufferDBMutex);
+#endif
+
     // The buffer in this list will be popped at the end of the
     // FilterModule::write() call.  It will be freed if it is not passed
     // to another FilterModule::write() from within modules
@@ -308,19 +332,10 @@ void *CRTSFilter::getBuffer(size_t bufferLen)
 }
 
 
-void CRTSFilter::releaseBuffer(void *buffer)
+void CRTSFilter::releaseBuffers(void)
 {
-    // This could be a useful for decrementing the useCount of a buffer in
-    // the CRTSFilter::write() call to alleviate buffer access contention.
-    // If this is not called the buffer useCount is automatically
-    // decremented in FilterModule::write() that called the
-    // CRTSFilter::write();
-    //
-    // TODO: WRITE THIS FUNCTION  This may require adding move meta variables
-    // to the buffer.  One might ask what is the point of this function...
-
+    filterModule->removeUnusedBuffers();
 }
-
 
 
 // The buffer used here must be from CRTSFilter::getBuffer().
@@ -347,15 +362,16 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
 
         // Check that the buffer is one of ours.
         DASSERT(h->magic == MAGIC, "");
-
-        // Mark this buffer as in use by this filter.  Once the useCount
-        // goes to zero it will never go back up again. 
-        ++h->useCount;
     }
 
 
     if(toDifferentThread)
     {
+        WARN();
+
+        if(h)
+            // We need to increment the buffer useCount for the thread here
+            ++h->useCount;
 
         // NOTE: thread is the pthread we are writing to from the current
         // pthread (not thread).
@@ -366,15 +382,6 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
 
         // In this case this function is being called from a thread
         // that is not from the thread of this object.
-
-        // We need to increment the buffer useCount for the thread here
-        if(h)
-        {
-            ++h->useCount;
-            // That will reserve this buffer for this thread that
-            // we will signal to run and that thread will release
-            // this by decrementing the useCount when it is done.
-        }
 
         // This is an interesting point in the simulation.  This is where
         // this thread may be blocked waiting for the thread of the "next
@@ -472,12 +479,25 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
         thread->len = len;
         thread->channelNum = channelNum;
 
+#if 0
+        // We check to free the buffer that was passed to us
+        // in the thread, not here.
+        if(h && h->useCount.fetch_sub(1) == 1)
+            // header from the buffer passed in.
+            freeBuffer(h);
+#endif
+
         MUTEX_UNLOCK(&thread->mutex);
         // The thread thread will decrement the buffer use count at
         // the end of it's cycle.
+
     }
     else
     {
+        if(h)
+            // We need to increment the buffer use count
+            ++h->useCount;
+
         // This is being called from a stack of more than one
         // CRTSFilter::write() calls so there is no need to get a mutex
         // lock, the current thread stack keeps CRTSFilter::write()
@@ -486,14 +506,18 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
         // The CRTSFilter::write() call can generate more
         // FilterModule::writes() via module writer interface
         // CRTSFilter::writePush().
-        this->filter->write(buffer, len, channelNum);
-
+        filter->write(buffer, len, channelNum);
+   
+        // This filter may have made some buffers now we check if they are
+        // in use and free them if they are not in use.
         removeUnusedBuffers();
-    }
 
-    if(h && h->useCount.fetch_sub(1) == 1)
-        // header from the buffer passed in.
-        freeBuffer(h);
+        // We check to free the buffer that was passed to us.
+        if(h && h->useCount.fetch_sub(1) == 1)
+            // header from the buffer passed in.
+            freeBuffer(h);
+
+    }
 }
 
 
@@ -510,9 +534,14 @@ void FilterModule::removeUnusedBuffers(void)
         struct Header *header = (struct Header *) buffers.top();
 
         if(header->useCount.fetch_sub(1) == 1)
+        {
             freeBuffer(header);
+            DSPEW("freed buffer in filter %s", name.c_str());
+        }
         // else this buffer is being used in a filter in
         // another thread.
         buffers.pop();
+
+        DSPEW();
     }
 }

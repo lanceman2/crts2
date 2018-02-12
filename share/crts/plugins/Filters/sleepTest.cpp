@@ -42,8 +42,8 @@ SleepTest::SleepTest(int argc, const char **argv)
     memset(&buffer, 0, sizeof(buffer));
     srand48_r(seedVal, &buffer);
     lrand48_r(&buffer, &t.tv_nsec);
-    // sleep time between 0.001 to 0.011
-    t.tv_nsec = t.tv_nsec % 1000000 + 1000000;
+    // sleep time between 0.001 to 0.003 seconds
+    t.tv_nsec = t.tv_nsec % 2000000 + 1000000;
 
     DSPEW("sleep interval = %g seconds", t.tv_nsec/(1.0e9));
 }

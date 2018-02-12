@@ -4,9 +4,9 @@
 #include <errno.h>
 #include <string>
 
+#include "crts/crts.hpp"
 #include "crts/debug.h"
 #include "crts/Filter.hpp"
-#include "crts/crts.h" // for:  FILE *crtsOut
 
 
 class FileIn : public CRTSFilter
@@ -32,52 +32,27 @@ class FileIn : public CRTSFilter
 static void usage(void)
 {
     char name[64];
-    fprintf(stderr,
-"\n"
-"\n"
-"Usage: %s [ OPTIONS ]\n"
-"\n"
-"\n"
-"  ---------------------------------------------------------------------------\n"
-"                           OPTIONS\n"
-"  ---------------------------------------------------------------------------\n"
-"\n"
-"\n"
-"   --file FILENAME   Read file FILENAME.  By default reads stdin.\n"
-"\n"
-"\n",
-        CRTSFILTER_NAME(name, 64));
+    fprintf(crtsOut, "Usage: %s [ IN_FILENAME ]\n"
+            "\n"
+            "  The option IN_FILENAME is optional.\n"
+            "  The default input is stdin.\n"
+            "\n"
+            "\n"
+            , CRTSFILTER_NAME(name, 64));
 
-    errno = 0;
-    throw "usage help"; // This is how return an error from a C++ constructor
-    // the module loader will catch this throw.
+    throw ""; // This is how return an error from a C++ constructor
+    // the module loader with catch this throw.
 }
 
 
 
 FileIn::FileIn(int argc, const char **argv)
 {
-    int i;
-#ifdef DEBUG
-    DSPEW();
-    if(argc>0)
-        DSPEW("  GOT ARGS");
-    for(i=0; i<argc; ++i)
-        DSPEW("    ARG[%d]=\"%s\"", i, argv[i]);
-#endif
-
     const char *filename = 0;
-
-    for(i=0; i<argc; ++i)
-    {
-        if(!strcmp(argv[i], "--file") && i<argc+1)
-        {
-            filename = argv[++i];
-            continue;
-        }
-        else
-            usage();
-    }
+    if(argc > 1 || (argc == 1 && argv[0][0] == '-'))
+        usage();
+    else if(argc == 1)
+        filename = argv[0];
 
     if(filename)
     {
@@ -92,18 +67,16 @@ FileIn::FileIn(int argc, const char **argv)
     }
     else
         file = stdin;
+
+    DSPEW();
 }
 
 
 FileIn::~FileIn(void)
 {
-    DSPEW();
-
-    // TODO: delete the usrp.  libuhd is a piece of shit so you can't.
-
-    // TODO: What does this return:
-    if(file != stdin)
+    if(file && file != stdin)
         fclose(file);
+    file = 0;
 
     DSPEW();
 }
@@ -149,6 +122,13 @@ ssize_t FileIn::write(void *buffer, size_t len, uint32_t channelNum)
         if(ret > 0)
             // Send this buffer to the next readers write call.
             writePush(buffer, ret, ALL_CHANNELS);
+
+        // Check if any of our allocated buffers need freeing.  They may
+        // be in use in another thread, or not, so we free it now or after
+        // the other thread finishes with it.  That's what happens in
+        // asynchronous multithreaded programs.  Since this function may
+        // never return we must stop memory from leaking here.
+        releaseBuffers();
     }
 
     return 1;
