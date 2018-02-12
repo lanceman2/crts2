@@ -313,7 +313,9 @@ void *CRTSFilter::getBuffer(size_t bufferLen)
 
     if(bufferDBNum > bufferDBMax)
     {
-        // If this keeps growing we want to know.
+        // Note: This only prints if the maximum number of buffers
+        // increases.  If it increases without bound we want to know
+        // so let it spew without bound if that's the case.
         NOTICE("We now have %" PRIu64 " buffers", bufferDBNum);
         bufferDBMax = bufferDBNum;
     }

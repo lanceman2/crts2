@@ -296,4 +296,16 @@ Thread::~Thread()
 
     stream.threads.remove(this);
     --totalNumThreads;
+
+#ifdef BUFFER_DEBUG
+    if(totalNumThreads == 0)
+    {
+        MUTEX_LOCK(&bufferDBMutex);
+        DSPEW("total remaining buffers = %" PRIu64, bufferDBNum);
+        DASSERT(bufferDBNum == 0,
+                "There are %" PRIu64 " unfreed buffers",
+                bufferDBNum);
+        MUTEX_UNLOCK(&bufferDBMutex);
+    }
+#endif
 }

@@ -112,6 +112,7 @@ struct Buffer
 
 
 // This must be thread safe.
+//
 static inline void freeBuffer(struct Header *h)
 {
     DASSERT(h, "");
@@ -128,7 +129,7 @@ static inline void freeBuffer(struct Header *h)
 #ifdef BUFFER_DEBUG
     MUTEX_LOCK(&bufferDBMutex);
     --bufferDBNum;
-    NOTICE("freeing buffer(%" PRIu64 ") =%p", bufferDBNum,  h);
+    //NOTICE("freeing buffer(%" PRIu64 ") =%p", bufferDBNum,  h);
 
     MUTEX_UNLOCK(&bufferDBMutex);
 #endif
