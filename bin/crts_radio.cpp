@@ -644,6 +644,12 @@ int main(int argc, const char **argv)
         return 1; // return failure status
     }
 
+    if(Stream::streams.size() == 0)
+    {
+        cleanupModules();
+        return usage(argv[0]);
+    }
+
     ///////////////////////////////////////////////////////////////////
     // TODO: Check that connections in the stream make sense ???
     ///////////////////////////////////////////////////////////////////

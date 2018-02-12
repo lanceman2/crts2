@@ -81,7 +81,7 @@ function _crts_radio_complete()
         [[ ${prev_word} != -l ]] && [[ ${prev_word} != "--load" ]] ; then
         # We currently only do the filter and load option and this is
         # not that so:
-        return 0 # done
+        return 1 # default completion
     fi
 
     local mod_dir;
@@ -133,4 +133,4 @@ function _crts_radio_complete()
 
 # Register the function _crts_radio_complete to provide bash completion for
 # the program crts_radio
-complete -F _crts_radio_complete crts_radio
+complete -o default -F _crts_radio_complete crts_radio

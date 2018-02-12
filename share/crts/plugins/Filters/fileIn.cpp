@@ -75,7 +75,8 @@ FileIn::FileIn(int argc, const char **argv)
             filename = argv[++i];
             continue;
         }
-        usage();
+        else
+            usage();
     }
 
     if(filename)
