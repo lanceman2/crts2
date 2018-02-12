@@ -230,8 +230,8 @@ CRTSFilter::CRTSFilter(bool canWriteBufferIn):
 void CRTSFilter::writePush(void *buffer, size_t bufferLen,
         uint32_t channelNum)
 {
-    DASSERT(buffer, "");
-    DASSERT(bufferLen, "");
+    //DASSERT(buffer, "");
+    //DASSERT(bufferLen, "");
 
     // channelNum must be a reader channel in this filter
     DASSERT(filterModule->numReaders > channelNum ||

@@ -76,7 +76,30 @@ while ./crts_radio\
  do echo -e "\n\nSuccess\n\n" ;\
  sleep 1 ; done
 
- 
+
+./crts_radio -l sleepTest\
+ -f sourceFeed\
+ -f fileIn [ --file xxx1 ]\
+ -f fileIn [ --file xxx2 ]\
+ -f sleepTest\
+ -f sleepTest\
+ -f stdout\
+ -c 0 1 0 2 1 3 2 4 3 5 4 5\
+ -d -e
+
+ # or with a single thread running all
+while ./crts_radio -l sleepTest\
+ -f sourceFeed\
+ -f fileIn [ --file xxx1 ]\
+ -f fileIn [ --file xxx2 ]\
+ -f sleepTest\
+ -f sleepTest\
+ -f stdout\
+ -c 0 1 0 2 1 3 2 4 3 5 4 5\
+  > xxxx ; do \
+  echo -e "\n\nSuccess\n\n" ; sleep 1 ; done
+
+
  rm xxx*
 
 
