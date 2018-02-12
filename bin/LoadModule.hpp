@@ -198,7 +198,8 @@ static inline char *GetPluginPath(const char *category, const char *name)
 */
 template <class T>
 T *LoadModule(const char *path, const char *category, int argc,
-        const char **argv, void *(*&destroyer)(T *))
+        const char **argv, void *(*&destroyer)(T *),
+        int dlflags = RTLD_NODELETE|RTLD_NOW|RTLD_DEEPBIND)
 {
     DASSERT(path, "");
     DASSERT(category, "");
@@ -219,11 +220,15 @@ T *LoadModule(const char *path, const char *category, int argc,
 
     ModuleLoader<T,T *(*)(int argc, const char **argv)> moduleLoader;
 
-    if(moduleLoader.loadFile(path,
-            RTLD_NODELETE|RTLD_GLOBAL|RTLD_NOW|RTLD_DEEPBIND))
+    if(moduleLoader.loadFile(path, dlflags))
+                // See 'man dlopen(3)' for what these option
+                // flags mean.
+            //RTLD_NODELETE|RTLD_GLOBAL|RTLD_NOW|RTLD_DEEPBIND))
+            // The RTLD_GLOBAL flag may be a bad idea.
+            //RTLD_NODELETE|RTLD_NOW|RTLD_DEEPBIND))
     {
         ERROR("Failed to load module plugin \"%s\"", path);
-        return 0;
+        return 0; // fail
     }
 
 
@@ -245,7 +250,7 @@ T *LoadModule(const char *path, const char *category, int argc,
 
         if(ret && destroyer)
             destroyer(ret);
-        ret = 0;
+        ret = 0; // fail
         destroyer = 0;
     }
     catch(std::string msg)
@@ -260,7 +265,7 @@ T *LoadModule(const char *path, const char *category, int argc,
 
         if(ret && destroyer)
             destroyer(ret);
-        ret = 0;
+        ret = 0; // fail
         destroyer = 0;
     }
 

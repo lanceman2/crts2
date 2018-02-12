@@ -5,6 +5,7 @@ INSTALL_DIR = $(PREFIX)/crts/include
 
 INSTALLED :=\
  MakeModule.hpp\
+ Module.hpp\
  Filter.hpp\
  debug.h
 

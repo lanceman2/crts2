@@ -179,7 +179,8 @@ Stream::Stream(void):
 
 Stream::~Stream(void)
 {
-    DSPEW();
+    DSPEW("cleaning up stream with %" PRIu32 " filters with %zu threads",
+            loadCount, threads.size());
     // This is the main thread.
     DASSERT(pthread_equal(Thread::mainThread, pthread_self()), "");
 
@@ -251,14 +252,18 @@ Stream::~Stream(void)
             nanosleep(&t, 0);
         }
         else
+        {
             // All threads are calling pthread_cond_wait() in
             // filterThreadWrite() no other thread is coded to
             // signal and wake them, so we can assume that they
             // are all under this main threads control now.
+            DSPEW();
             break;
+        }
     }
 
-
+    DSPEW();
+    
     // NOW: All Threads in this stream should be in pthread_cond_wait() in
     // filterThreadWrite().
 
@@ -276,16 +281,27 @@ Stream::~Stream(void)
 
     // Now all the thread in this stream should be heading toward
     // return 0.
-
-    // The thread destructor removes itself from the
-    // threads list.
-    for(auto tt = threads.begin();
+    
+    if(threads.empty())
+    {
+        DSPEW("Cleaning up filter modules with no threads set up");
+        // We have not thread objects yet so we need to
+        // delete the filter modules in the streams.
+        for(auto it : map)
+            delete it.second;
+    }
+    else
+    {
+        // The thread destructor removes itself from the
+        // threads list.
+        for(auto tt = threads.begin();
             tt != threads.end();
             tt = threads.begin())
-        // The thread will delete all the filter modules
-        // that in-turn destroys the CRTSFilter in the filter
-        // module.
-        delete *tt;
+            // The thread will delete all the filter modules
+            // that in-turn destroys the CRTSFilter in the filter
+            // module.
+            delete *tt;
+    }
 
     // Remove this from the streams list
     streams.remove(this);

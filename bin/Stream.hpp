@@ -11,10 +11,6 @@ class Stream
 
         // TODO: More of this needs to be private.
 
-        // number of Thread objects running this stream.
-        // Added to in each Thread::Thread() call.
-        uint32_t numThreads;
-
         // For each Stream there is at least one source but there
         // can be any number of sources.  There we keep a list
         // of all the sources for this stream.
@@ -74,7 +70,7 @@ class Stream
 
         // TODO: Check this out ...
         // A lock for editing the this stream.
-        pthread_rwlock_t rwlock;
+        //pthread_rwlock_t rwlock;
 
 
         // A list of threads that run a list of filter modules.

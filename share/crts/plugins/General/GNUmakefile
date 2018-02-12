@@ -33,20 +33,6 @@ undefine MkSource
 undefine s
 
 
-readline.so_LDFLAGS := -lreadline
-
-rx.so_LDFLAGS := -luhd
-tx.so_LDFLAGS := -luhd
-
-liquidSync.so_LDFLAGS :=\
- $(LIQUID_LDFLAGS)\
- $(LIBFEC_LDFLAGS)\
- $(SRC_RPATH)
-
-liquidFrame.so_LDFLAGS :=\
- $(LIQUID_LDFLAGS)\
- $(LIBFEC_LDFLAGS)\
- $(SRC_RPATH)
 
 
 
@@ -54,11 +40,10 @@ liquidFrame.so_LDFLAGS :=\
 #
 # After we install the programs we reset the RPATH so that the programs
 # can find the installed libliquid and libfec shared libraries at run-time.
-INSTALL_RPATH = patchelf --set-rpath '$(PREFIX)/lib'
+#INSTALL_RPATH = patchelf --set-rpath '$(PREFIX)/lib'
 
-POST_INSTALL_COMMAND =\
- $(INSTALL_RPATH) $(INSTALL_DIR)/liquidFrame.so &&\
- $(INSTALL_RPATH) $(INSTALL_DIR)/liquidSync.so
+#POST_INSTALL_COMMAND =\
+# $(INSTALL_RPATH) $(INSTALL_DIR)/liquidFrame.so
 
 
 # above we auto generate lines like this:

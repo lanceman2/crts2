@@ -30,6 +30,10 @@
 # filter plugins from parsing those two strings.  That may be more work
 # than this.
 
+
+# Now this bash completion supports -l | --load G_MOD
+
+
 # We want this to look in the CRTS filter modules plugin directory
 # on-the-fly so that the user does not have to do anything, but put the
 # plugin (DSO library file) into the CRTS filter modules plugin directory,
@@ -62,13 +66,25 @@ function _crts_radio_complete()
         COMPREPLY=("-f")
         return 0 # done
     fi
+    if [[ ${cur_word} == --l* ]] ; then
+        # Just fill in: --load
+        COMPREPLY=("--load")
+        return 0 # done
+    fi
+    if [[ ${cur_word} == -l ]] ; then
+        COMPREPLY=("-l")
+        return 0 # done
+    fi
 
-    if [[ ${prev_word} != -f ]] && [[ ${prev_word} != "--filter" ]] ; then
-        # We currently only do the filter option and this is
+
+    if [[ ${prev_word} != -f ]] && [[ ${prev_word} != "--filter" ]] &&\
+        [[ ${prev_word} != -l ]] && [[ ${prev_word} != "--load" ]] ; then
+        # We currently only do the filter and load option and this is
         # not that so:
         return 0 # done
     fi
 
+    local mod_dir;
 
     # TODO: For now we require that this bash file be in a special path
     # directory which is requires that filter plugins be in
@@ -78,9 +94,16 @@ function _crts_radio_complete()
     # This will even work when the software is not installed yet and
     # is built in the source directory.  A major major plus for
     # developers.
-    #
-    local mod_dir="$(dirname ${BASH_SOURCE[0]})" || return 0
-    mod_dir="$mod_dir"/../../share/crts/plugins/Filters/
+
+    if [[ ${prev_word} == -f ]] || [[ ${prev_word} == "--filter" ]] ; then
+        mod_dir="$(dirname ${BASH_SOURCE[0]})" || return 0
+        mod_dir="$mod_dir"/../../share/crts/plugins/Filters/
+    else
+        # it must be a -l | --load
+        mod_dir="$(dirname ${BASH_SOURCE[0]})" || return 0
+        mod_dir="$mod_dir"/../../share/crts/plugins/General/
+    fi
+
 
     local i
     local mod

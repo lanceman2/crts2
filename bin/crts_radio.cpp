@@ -1,6 +1,7 @@
 #ifndef _GNU_SOURCE
 #  define _GNU_SOURCE
 #endif
+#include <dlfcn.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <string.h>
@@ -21,9 +22,11 @@
 
 // Read comments in ../include/crts/Filter.hpp.
 #include "crts/Filter.hpp"
+#include "crts/Module.hpp"
 #include "FilterModule.hpp"
 #include "Thread.hpp"
 #include "Stream.hpp"
+#include "LoadModule.hpp"
 
 
 
@@ -158,6 +161,17 @@ static int usage(const char *argv0, const char *uopt=0)
 "   -h | --help                      print this help and exit\n"
 "\n"
 "\n"
+"   -l | --load G_MOD [OPTS ...]     load general module file passing the OPTS ...\n"
+"                                    arguments to the objects constructor.  General\n"
+"                                    modules are loaded with symbols shared so that\n"
+"                                    you may shared variables across CRTS Filter\n"
+"                                    modules through general modules.  General\n"
+"                                    modules will only be loaded once for a given\n"
+"                                    G_MOD.\n"
+"\n"
+"                                       TODO: general module example...\n"
+"\n"
+"\n"
 "   -p | --print FILENAME            print a DOT graph to FILENAME.  This should be\n"
 "                                    after all filter options in the command line.  If\n"
 "                                    FILENAME ends with .png this will write a PNG\n"
@@ -236,6 +250,100 @@ static inline int doPrint(Stream* &stream, const char *filename = 0,
 }
 
 
+// Container for CRTSModule objects and its destroy function.
+class Module
+{
+    public:
+
+        Module(CRTSModule *m, void *(*d)(CRTSModule *));
+
+        CRTSModule *module;
+        void *(*destroyModule)(CRTSModule *);
+};
+
+// List of CRTSModule objects that we loaded.
+//
+// This modules different from CRTSFilter modules in that they have a more
+// global scope, i.e. they share symbols with the whole process, and they
+// are not tied to a particular stream.
+//
+// Thread safety may be very important in these objects given they are
+// "globally" accessible by all CRTSFilters.
+//
+// The CRTSModule objects are destroyed after all the streams.
+//
+// We keep a map of loaded modules keyed by unique name string, so we can
+// prevent a module with the same name from getting loaded more than once.
+static std::map<std::string, Module *> modulesMap;
+
+// In addition to key by name we need the insertion/load order of the
+// modules in a list.  std::map does not keep insertion order.
+static std::list<Module *> modulesList;
+
+CRTSModule::CRTSModule() { DSPEW(); }
+CRTSModule::~CRTSModule(void) { DSPEW(); }
+
+Module::Module(CRTSModule *m, void *(*d)(CRTSModule *)):
+    module(m), destroyModule(d)
+{ 
+    DSPEW();
+}
+
+
+static void cleanupModules(void)
+{
+    for(auto m = modulesList.rbegin(); m != modulesList.rend(); ++m)
+    {
+        (*m)->destroyModule((*m)->module);
+        delete (*m);
+    }
+
+    // empty the list and map
+    modulesList.clear();
+    modulesMap.clear();
+}
+
+
+// crtsRequireModule() is exported to the CRTSFilter and CRTSModule
+// codes.
+//
+// Returns false on success.
+bool crtsRequireModule(const char *name, int argc, const char **argv)
+{
+    DSPEW("got option load general module:  %s", name);
+
+    std::string str = name;
+
+    if(modulesMap.find(str) != modulesMap.end())
+    {
+        NOTICE("general module \"%s\" is already loaded", name);
+        return false; // success
+    }
+
+
+    // TODO: add a requireModule() method to CRTSFilter
+    // which will load these kinds of modules if the CRTSFilter
+    // needs them.
+    void *(*destroyModule)(CRTSModule *) = 0;
+
+    CRTSModule *module = LoadModule<CRTSModule>(name, "General",
+            argc, argv, destroyModule,
+            RTLD_NODELETE|RTLD_GLOBAL|RTLD_NOW|RTLD_DEEPBIND);
+
+    if(!module || !destroyModule)
+        return true; // Fail
+
+    Module *m = new Module(module, destroyModule);
+
+    // We keep two lists: a std::map and a map::list
+    modulesMap[str] = m;
+    modulesList.push_back(m);
+
+    return false;
+}
+
+
+
 /////////////////////////////////////////////////////////////////////
 // Parsing command line arguments
 //
@@ -272,6 +380,13 @@ static int parseArgs(int argc, const char **argv)
             if(stream->load(str.c_str(), Argc, Argv))
                 return 1;
 
+            continue;
+        }
+
+        if(get_opt(str, Argc, Argv, "-l", "--load", argc, argv, i))
+        {
+            if(crtsRequireModule(str.c_str(), Argc, Argv))
+                return 1; // fail
             continue;
         }
 
@@ -524,6 +639,8 @@ int main(int argc, const char **argv)
 
         Stream::destroyStreams();
 
+        cleanupModules();
+        
         return 1; // return failure status
     }
 
@@ -549,6 +666,14 @@ int main(int argc, const char **argv)
                         filterModule2->thread->threadNum,
                         filterModule->name.c_str(),
                         filterModule2->name.c_str());
+        
+                    for(auto stream : Stream::streams)
+                        // Flag the streams as not running in regular mode.
+                        stream->isRunning = false;
+
+                    Stream::destroyStreams();
+
+                    cleanupModules();
 
                     return 1; // error fail exit.
                 }
@@ -671,7 +796,9 @@ int main(int argc, const char **argv)
     // that up, and may exit when you try to gracefully shutdown.
     //
     Stream::destroyStreams();
-
+ 
+    cleanupModules();
+ 
     DSPEW("FINISHED");
 
     return 0;

@@ -188,15 +188,16 @@ FilterModule::~FilterModule(void)
     }
 
     DASSERT(stream, "");
-    DASSERT(thread, "");
-    DASSERT(thread->filterModule != this,
-            "this filter module has a thread set to call its' write()");
 
     DASSERT(filter, "");
     DASSERT(destroyFilter, "");
 
-    thread->filterModules.remove(this);
-
+    if(thread)
+    {
+        DASSERT(thread->filterModule != this,
+            "this filter module has a thread set to call its' write()");
+        thread->filterModules.remove(this);
+    }
 
     // Call the CRTSFilter factory destructor function that we got
     // from loading the plugin.
@@ -401,14 +402,6 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
         }
 
 
-        if(thread->threadWaiting)
-            // signal the thread that is waiting now.
-            // The flag thread->threadWaiting and the mutex guarantee
-            // that the thread is waiting now.
-            ASSERT((errno = pthread_cond_signal(&thread->cond))
-                    == 0, "");
-            // The thread will wake up only after we release the threads
-            // mutex lock down below here.
         
         // If (thread->filterModule) then we have a request already
         // and we must wait for the thread to signal us, and then set this
@@ -416,17 +409,16 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
         // one, making us block when the queue is "full".  This will allow
         // two "adjacent" CRTSFilter write threads to run at the same time.
         //
-        // Ya, seamless parallel processing: the parallelization happens
-        // from the program runners option, not from the CRTSFilter
-        // modules code.
-        //
         if(thread->filterModule)
         {
+            // This is the case where this thread must block because there
+            // is a request for this thread already.
+
             pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
             pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
 
             // This signal wait call is very important.  Without it we
-            // could end up having a fast CRTSFilter overrunning its
+            // could end up having this fast CRTSFilter overrunning its
             // slower adjacent CRTSFilter.
             //
             // Note: we have two interlocking mutexes.
@@ -439,9 +431,6 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
 
             MUTEX_UNLOCK(&thread->mutex);
 
-            // From the thread->threadWaiting the state of the
-            // thread is guaranteed to become running
-            // in the 
 
             // We release the mutex lock and wait:
             ASSERT((errno = pthread_cond_wait(&cond, &mutex)) == 0, "");
@@ -465,6 +454,15 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
             thread->queueCond = 0;
 #endif
         }
+
+        if(thread->threadWaiting)
+            // signal the thread that is waiting now.
+            // The flag thread->threadWaiting and the mutex guarantee
+            // that the thread is waiting now.
+            ASSERT((errno = pthread_cond_signal(&thread->cond))
+                    == 0, "");
+            // The thread will wake up only after we release the threads
+            // mutex lock down below here.
 
         DASSERT(!thread->filterModule, "thread %" PRIu32,
                 thread->threadNum);

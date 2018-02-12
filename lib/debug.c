@@ -39,6 +39,7 @@ static void _vspew(FILE *stream, int errn, const char *pre, const char *file,
 
     if(len < 10 || len > BUFLEN - 40)
     {
+
         //
         // Try again without buffering
         //
@@ -56,11 +57,11 @@ static void _vspew(FILE *stream, int errn, const char *pre, const char *file,
                     getpid(), syscall(SYS_gettid), func);
     
         vsnprintf(&buffer[len], BUFLEN - len,  fmt, ap);
+
         return;
     }
-
     vsnprintf(&buffer[len], BUFLEN - len,  fmt, ap);
-    fprintf(stream, "%s", buffer);
+    fputs(buffer, stream);
 }
 
 void _spew(FILE *stream, int errn, const char *pre, const char *file,
