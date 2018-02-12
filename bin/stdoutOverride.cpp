@@ -58,17 +58,16 @@ static FILE *stdoutOverride(void)
 
     ASSERT(dup2(2,1) == 1, ""); // make 1 be like stderr
 
-    // now stdout is writing to what is also stderr.
-    // The awkward thing is that stdout and stderr have different
-    // buffers and different flushing rules.  The two streams
-    // will be in correct order within themselves but there
-    // will be no way to know the order between the two merged
-    // streams.  We could tag the 
+    // now stdout is writing to what is also stderr.  The awkward thing is
+    // that stdout and stderr have different buffers and different
+    // flushing rules.  The two streams will be in correct order within
+    // themselves but there will be no way to know the order between the
+    // two merged streams.
 
     // Make crtsOut act like stdout stream used to.
     ASSERT((crtsOut = fdopen(3, "w")) != NULL, "");
-    // Now writing to crtsOut will write out to a bash pipe line,
-    // for example.
+    // Now writing to crtsOut will write out to a bash pipe line, for
+    // example.
 
     // We can now write to crtsOut to write to what appears as stdout in a
     // bash pipe line.
@@ -82,4 +81,5 @@ static FILE *stdoutOverride(void)
 }
 
 // crtsOut will act like stdout after startupFunction() gets called.
+// Note: that will happen before main() is called.
 FILE *crtsOut = stdoutOverride();
