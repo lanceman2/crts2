@@ -1,2 +1,6 @@
 
-Add buffer locks
+Need to analyse the different shutdown modes, in particular how and source
+module effects other source modules in the same stream.
+
+
+Add buffer locks (read/write).
