@@ -176,9 +176,7 @@ void Tx::init(void)
 
 Tx::~Tx(void)
 {
-    // TODO: delete the usrp.  libuhd is a piece of shit so you can't.
-
-    // TODO: delete usrp device ????
+    // TODO: delete usrp device; how?
 
     DSPEW();
 }
@@ -188,7 +186,7 @@ Tx::~Tx(void)
 ssize_t Tx::write(void *buffer, size_t len, uint32_t channelNum)
 {
     // This init() call creates libuhd resources that must be in this
-    // thread, because libuhd is a pile of shit.
+    // thread, because of libuhd.
     if(!device) init();
 
     // TODO: check for error here:

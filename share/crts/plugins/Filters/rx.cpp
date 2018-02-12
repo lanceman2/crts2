@@ -40,9 +40,8 @@
 // We must make the two multi_usrp objects before we configure them by
 // setting frequency, rate (bandWidth), and gain; otherwise the process
 // exits with status 0.  And it looks like you can use the same object for
-// both receiving (RX) and transmitting (TX).  The UHD API seems to be a
-// piece of shit in general.  Here we are keeping a list of stupid shit it
-// does, and a good API will never do:
+// both receiving (RX) and transmitting (TX).   Here we are keeping a list
+// of stupid things libuhd does, and a good API will never do:
 //
 //    - calls exit; instead of throwing an exception
 //
@@ -54,12 +53,9 @@
 //    - catches signals
 //
 //
-// It may be libBOOST doing this shit...  so another thing to add to the
-// bad things list:
+// It may be libBOOST is doing some of this.
 //
-//   - links with BOOST
-//
-// We sometimes get Floating point exception and the program exits
+// We sometimes get Floating point exception and the program exits.
 
 
 class Rx : public CRTSFilter
@@ -205,9 +201,7 @@ Rx::Rx(int argc, const char **argv):
 
     // This init() call fails.  We think because is is not running in the
     // same thread that is reading the RX, or maybe it's just not reading
-    // soon enough.  Either way this leads us to believe that libuhd is a
-    // pile of shit.
-    //
+    // soon enough.
     //init();
 }
 
@@ -238,14 +232,10 @@ Rx::~Rx(void)
 {
     DSPEW();
 
-    // TODO: delete the usrp.  libuhd is a piece of shit so you can't.
-
     // TODO: What does this return:
     if(usrp)
         usrp->issue_stream_cmd(uhd::stream_cmd_t::STREAM_MODE_STOP_CONTINUOUS);
 
-    // TODO: delete usrp ????
-    //
     // TODO: delete usrp device ????
 
     DSPEW();
@@ -261,7 +251,7 @@ ssize_t Rx::write(void *buffer_in, size_t len, uint32_t channelNum)
     DASSERT(buffer_in == 0, "");
 
     // This init() call creates libuhd resources that must be in this
-    // thread, because libuhd is a pile of shit.
+    // thread, because of libuhd.
     if(!device) init();
 
 

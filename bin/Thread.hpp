@@ -63,7 +63,7 @@ class Thread
         // We let the main thread be 0 and this starts at 1
         // This is fixed after the object creation.
         // This is mostly so we can see small thread numbers like
-        // 0, 1, 2, 3, ... 8 whatever, not shit like 23431, 5634, ...
+        // 0, 1, 2, 3, ... 8 whatever, not like 23431, 5634, ...
         uint32_t threadNum;
 
         // Number of these objects created.
