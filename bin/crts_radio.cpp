@@ -16,6 +16,7 @@
 #include <atomic>
 
 #include "crts/debug.h"
+#include "crts/crts.hpp"
 
 #include "get_opt.hpp"
 #include "pthread_wrappers.h" // some pthread_*() wrappers
@@ -28,6 +29,27 @@
 #include "Stream.hpp"
 #include "LoadModule.hpp"
 
+
+class Feed : public CRTSFilter
+{
+    public:
+
+#ifdef DEBUG
+        Feed(void) { DSPEW(); };
+        ~Feed(void) { DSPEW(); };
+#endif
+        ssize_t write(void *buffer, size_t bufferLen,
+                uint32_t channelNum);
+};
+
+ssize_t Feed::write(void *buffer, size_t bufferLen,
+                uint32_t channelNum)
+{
+    DASSERT(!buffer,"");
+    while(stream->isRunning)
+        writePush(0, 0, ALL_CHANNELS);
+    return 0;
+}
 
 
 // We can add signals to this list that is 0 terminated.  Signals that we
@@ -572,6 +594,28 @@ static int parseArgs(int argc, const char **argv)
 
     // Finish building the default thread groupings for all streams.
     Stream::finishThreads();
+
+    // Now we add Feed source CRTSFilter objects to all the source
+    // CRTSFilter objects.
+    for(auto stream : Stream::streams)
+        for(auto filterModule : stream->sources)
+        {
+            CRTSFilter *feed = new Feed;
+            FilterModule *feedModule = stream->load(feed, 0, "feed");
+            stream->connect(feedModule, filterModule);
+            // The feed will use the thread of the source.
+            filterModule->thread->addFilterModule(feedModule);
+        }
+
+    // So now the old sources we had are now no longer sources.  They
+    // have a feed source.  We need to get the sources that are feeds
+    // now.
+    for(auto stream : Stream::streams)
+        stream->getSources();
+
+    // See what the Feeds added to the graph.
+    //Stream::printGraph(0, true);
+
 
     // TODO: Add checking of module connectivity, so that they make sense.
 

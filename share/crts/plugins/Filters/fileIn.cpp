@@ -93,43 +93,29 @@ ssize_t FileIn::write(void *buffer, size_t len, uint32_t channelNum)
     //
     DASSERT(buffer == 0, "");
 
-    while(stream->isRunning)
+    if(feof(file)) 
     {
-        if(feof(file)) 
-        {
-            // end of file
-            stream->isRunning = false;
-            NOTICE("read end of file");
-            return 0; // We are done.
-        }
- 
-        // Recycle the buffer and len argument variables.
-        len = 1024;
-        // Get a buffer from the buffer pool.
-        buffer = (uint8_t *) getBuffer(len);
-
-        // This filter is a source, it reads file which is not a
-        // part of this filter stream.
-        size_t ret = fread(buffer, 1, len, file);
-
-        // Since fread() can block we check if another thread unset
-        // this flag:
-        if(!stream->isRunning) break;
-
-        if(ret != len)
-            NOTICE("fread(,1,%zu,file) only read %zu bytes", len, ret);
-
-        if(ret > 0)
-            // Send this buffer to the next readers write call.
-            writePush(buffer, ret, ALL_CHANNELS);
-
-        // Check if any of our allocated buffers need freeing.  They may
-        // be in use in another thread, or not, so we free it now or after
-        // the other thread finishes with it.  That's what happens in
-        // asynchronous multithreaded programs.  Since this function may
-        // never return we must stop memory from leaking here.
-        releaseBuffers();
+        // end of file
+        stream->isRunning = false;
+        NOTICE("read end of file");
+        return 0; // We are done.
     }
+ 
+    // Recycle the buffer and len argument variables.
+    len = 1024;
+    // Get a buffer from the buffer pool.
+    buffer = (uint8_t *) getBuffer(len);
+
+    // This filter is a source, it reads file which is not a
+    // part of this filter stream.
+    size_t ret = fread(buffer, 1, len, file);
+
+    if(ret != len)
+        NOTICE("fread(,1,%zu,file) only read %zu bytes", len, ret);
+
+    if(ret > 0)
+        // Send this buffer to the next readers write call.
+        writePush(buffer, ret, ALL_CHANNELS);
 
     return 1;
 }

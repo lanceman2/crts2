@@ -323,6 +323,24 @@ void Stream::destroyStreams(void)
 }
 
 
+FilterModule* Stream::load(CRTSFilter *crtsFilter,
+        void *(*destroyFilter)(CRTSFilter *),
+        const char *name)
+{
+    // This is the main thread.
+    DASSERT(pthread_equal(Thread::mainThread, pthread_self()), "");
+
+    FilterModule *m = new FilterModule(this, crtsFilter,
+            destroyFilter, loadCount, name);
+
+    map.insert(std::pair<uint32_t, FilterModule*>(loadCount, m));
+
+    ++loadCount;
+
+    return m;
+}
+
+
 // Return false on success.
 //
 // Each Stream is a factory of filter modules.  stream->load()
@@ -332,8 +350,6 @@ bool Stream::load(const char *name, int argc, const char **argv)
     // This is the main thread.
     DASSERT(pthread_equal(Thread::mainThread, pthread_self()), "");
 
-    FilterModule *m = 0;
-
     void *(*destroyFilter)(CRTSFilter *);
 
     CRTSFilter *crtsFilter = LoadModule<CRTSFilter>(name, "Filters",
@@ -342,11 +358,7 @@ bool Stream::load(const char *name, int argc, const char **argv)
     if(!crtsFilter || !destroyFilter)
         return true; // fail
 
-    m = new FilterModule(this, crtsFilter, destroyFilter, loadCount, name);
-
-    this->map.insert(std::pair<uint32_t, FilterModule*>(loadCount, m));
-
-    ++loadCount;
+    load(crtsFilter, destroyFilter, name);
 
     return false; // success
 }
@@ -367,9 +379,9 @@ bool Stream::connect(uint32_t from, uint32_t to)
         return true; // failure
     }
 
-    std::map<uint32_t,FilterModule*>::iterator it;
+    //std::map<uint32_t,FilterModule*>::iterator it;
 
-    it = this->map.find(from);
+    auto it = this->map.find(from);
     if(it == this->map.end())
     {
         ERROR("There is no filter numbered %" PRIu32, from);
@@ -383,9 +395,13 @@ bool Stream::connect(uint32_t from, uint32_t to)
         ERROR("There is no filter numbered %" PRIu32, to);
         return true; // failure
     }
-    FilterModule *t = it->second;
+
+    return connect(f, it->second);
+}
 
 
+bool Stream::connect(FilterModule *f/*from*/,  FilterModule *t/*to*/)
+{
     ////////////////////////////////////////////////////////////
     // Connect these two filters in this direction
     // like a doubly linked list from one filter to another.
@@ -422,15 +438,12 @@ bool Stream::connect(uint32_t from, uint32_t to)
     ++f->numReaders;
     ++t->numWriters;
 
-
     // Set this flag so we know there was at least one connection.
     haveConnections = true;
 
 
     DSPEW("Connected filter %s writes to %s",
             f->name.c_str(), t->name.c_str());
-
-
 
     return false; // success
 }

@@ -25,11 +25,9 @@ ssize_t SourceFeed::write(void *buffer, size_t len, uint32_t channelNum)
     // This filter is a source so there no data passed to
     // whatever called this write().
     //
-
     DASSERT(!buffer, "");
 
-    while(stream->isRunning)
-        writePush(buffer, len, ALL_CHANNELS);
+    writePush(buffer, len, ALL_CHANNELS);
     return 1;
 }
 

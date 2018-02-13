@@ -17,8 +17,7 @@
 // It'd be real nice if the UHD API would document what is thread-safe and
 // what is not for all the API.  We can only guess how to use this stupid
 // UHD API by looking at example codes.  From the program crashes I've
-// seen there are clearly some things that are not thread safe, or just
-// bad code in libuhd.
+// seen there are clearly some things that are not thread safe.
 //
 // The structure of the UHD API implies that you should be able to use a
 // single uhd::usrp::multi_usrp::sptr to do both transmission and
@@ -255,53 +254,43 @@ ssize_t Rx::write(void *buffer_in, size_t len, uint32_t channelNum)
     if(!device) init();
 
 
-    // source filters loop like this, making their own data.
 
-    while(stream->isRunning)
-    {
-
-        std::complex<float> *buffer = (std::complex<float> *)
+    std::complex<float> *buffer = (std::complex<float> *)
             getBuffer(sizeof(std::complex<float>)*numComplexFloats);
 
-        uhd::rx_metadata_t metadata; // set by recv();
+    uhd::rx_metadata_t metadata; // set by recv();
 
-        size_t numSamples = device->recv(
-                (unsigned char *)buffer, numComplexFloats, metadata,
-                uhd::io_type_t::COMPLEX_FLOAT32,
-                uhd::device::RECV_MODE_ONE_PACKET,
-                // TODO: fix this timeout ??
-                1.0/*timeout double seconds*/);
+    size_t numSamples = device->recv(
+            (unsigned char *)buffer, numComplexFloats, metadata,
+            uhd::io_type_t::COMPLEX_FLOAT32,
+            uhd::device::RECV_MODE_ONE_PACKET,
+            // TODO: fix this timeout ??
+            1.0/*timeout double seconds*/);
 
-        if(numSamples != numComplexFloats)
-            DSPEW("RX recv metadata.error_code=%d numSamples = %zu",
-                    metadata.error_code, numSamples);
+#ifdef DEBUG
+    if(numSamples != numComplexFloats)
+        DSPEW("RX recv metadata.error_code=%d numSamples = %zu",
+                metadata.error_code, numSamples);
+#endif
 
-        if(metadata.error_code && metadata.error_code !=
-                uhd::rx_metadata_t::ERROR_CODE_TIMEOUT)
-        {
-            DSPEW("RX recv metadata.error_code=%d numSamples = %zu",
-                    metadata.error_code, numSamples);
-            // For error codes see:
-            // https://files.ettus.com/manual/structuhd_1_1rx__metadata__t.html#ae3a42ad2414c4f44119157693fe27639
-            DSPEW("uhd::rx_metadata_t::ERROR_CODE_NONE=%d",
-                    uhd::rx_metadata_t::ERROR_CODE_NONE);
-            DSPEW("uhd::rx_metadata_t::ERROR_CODE_TIMEOUT=%d",
-                    uhd::rx_metadata_t::ERROR_CODE_TIMEOUT);
-        }
-
-        DASSERT(!(metadata.error_code && numSamples), "");
-
-        if(numSamples > 0)
-            writePush(buffer, numSamples*sizeof(std::complex<float>),
-                    CRTSFilter::ALL_CHANNELS);
-
-        // Check if any of our allocated buffers need freeing.  They may
-        // be in use in another thread, or not, so we free it now or after
-        // the other thread finishes with it.  That's what happens in
-        // asynchronous multithreaded programs.  Since this function may
-        // never return we must stop memory from leaking here.
-        releaseBuffers();
+    if(metadata.error_code && metadata.error_code !=
+            uhd::rx_metadata_t::ERROR_CODE_TIMEOUT)
+    {
+        DSPEW("RX recv metadata.error_code=%d numSamples = %zu",
+                metadata.error_code, numSamples);
+        // For error codes see:
+        // https://files.ettus.com/manual/structuhd_1_1rx__metadata__t.html#ae3a42ad2414c4f44119157693fe27639
+        DSPEW("uhd::rx_metadata_t::ERROR_CODE_NONE=%d",
+                uhd::rx_metadata_t::ERROR_CODE_NONE);
+        DSPEW("uhd::rx_metadata_t::ERROR_CODE_TIMEOUT=%d",
+                uhd::rx_metadata_t::ERROR_CODE_TIMEOUT);
     }
+
+    DASSERT(!(metadata.error_code && numSamples), "");
+
+    if(numSamples > 0)
+        writePush(buffer, numSamples*sizeof(std::complex<float>),
+                CRTSFilter::ALL_CHANNELS);
 
     return 1; // TODO: what to return????
 }

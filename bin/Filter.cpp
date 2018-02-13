@@ -190,7 +190,6 @@ FilterModule::~FilterModule(void)
     DASSERT(stream, "");
 
     DASSERT(filter, "");
-    DASSERT(destroyFilter, "");
 
     if(thread)
     {
@@ -199,9 +198,13 @@ FilterModule::~FilterModule(void)
         thread->filterModules.remove(this);
     }
 
-    // Call the CRTSFilter factory destructor function that we got
-    // from loading the plugin.
-    destroyFilter(filter);
+     if(destroyFilter)
+        // Call the CRTSFilter factory destructor function that we got
+        // from loading the plugin.
+        destroyFilter(filter);
+    else
+        // It was not loaded from a plugin.
+        delete filter;
 
     stream->map.erase(loadIndex);
 
@@ -369,8 +372,6 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
 
     if(toDifferentThread)
     {
-        WARN();
-
         if(h)
             // We need to increment the buffer useCount for the thread here
             ++h->useCount;
@@ -538,12 +539,9 @@ void FilterModule::removeUnusedBuffers(void)
         if(header->useCount.fetch_sub(1) == 1)
         {
             freeBuffer(header);
-            DSPEW("freed buffer in filter %s", name.c_str());
         }
         // else this buffer is being used in a filter in
         // another thread.
         buffers.pop();
-
-        DSPEW();
     }
 }

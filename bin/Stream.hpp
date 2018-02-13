@@ -25,9 +25,18 @@ class Stream
         static void finishThreads(void);
 
 
+        // Create a CRTSFilter plugin object without loading a file.
+        FilterModule *load(CRTSFilter *crtsFilter,
+                void *(*destroyFilter)(CRTSFilter *),
+                const char *name);
+
+        // Load a CRTSFilter plugin.
         bool load(const char *name, int argc, const char **argv);
 
         bool unload(FilterModule* filtermodule);
+
+
+        bool connect(FilterModule *from,  FilterModule *to);
 
         bool connect(uint32_t from, uint32_t to);
 
