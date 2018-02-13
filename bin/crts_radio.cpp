@@ -30,6 +30,13 @@
 #include "LoadModule.hpp"
 
 
+
+// We make a special CRTSFilter that feeds the source CRTSFilter plugins.
+// We thought of just requiring that the source CRTSFilter plugins have a
+// while() loop like this but then we'd loose the ability to inject code
+// between CRTSFilter::write() calls for source plugins.  We run these
+// Feed Filter Modules in the same thread as the source Filter Modules
+// that they feed.
 class Feed : public CRTSFilter
 {
     public:

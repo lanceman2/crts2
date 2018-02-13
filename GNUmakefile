@@ -22,7 +22,7 @@
 
 
 # We wish to have things accessed/built/installed in this order:
-SUBDIRS := liquid-dsp include lib bin share etc
+SUBDIRS := liquid-dsp include lib bin share etc interactiveTests
 
 
 

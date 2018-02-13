@@ -1,6 +1,5 @@
 
-// Comment this #define BUFFER_DEBUG out to not add extra debugging code.
-#define BUFFER_DEBUG
+// defining BUFFER_DEBUG will add extra debugging code.
 
 
 #ifdef BUFFER_DEBUG

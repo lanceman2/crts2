@@ -235,7 +235,10 @@ class CRTSFilter
         // What releaseBuffers() does is depends on filter module
         // connection topology and thread grouping.  Using it may or may
         // not make the stream run faster.  It just depends.
-        void releaseBuffers(void);
+        //
+        // TODO: This may not be needed given the source filters no longer
+        // loop, and return without looping in CRTSFilter::write().
+        //void releaseBuffers(void);
 
         // Releases a buffer lock if this module has a different thread
         // than the module that wrote to this module.  The module may

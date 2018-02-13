@@ -21,6 +21,9 @@ CFLAGS := -g -Wall -Werror
 
 CXXFLAGS := \$(CFLAGS)
 
+# Comment this out to not add extra code to debug the buffering.
+CPPFLAGS := -DBUFFER_DEBUG
+
 
 # select 1 of the next two lines, effects include/crts/debug.h
 DEBUG := \#define DEBUG

@@ -191,13 +191,6 @@ void Readline::run(void)
     line = 0;
 
     writePush((void *) buffer, bufLen, CRTSFilter::ALL_CHANNELS);
-
-    // Check if any of our allocated buffers need freeing.  They may
-    // be in use in another thread, or not, so we free it now or after
-    // the other thread finishes with it.  That's what happens in
-    // asynchronous multithreaded programs.  Since this function may
-    // never return we must stop memory from leaking here.
-    releaseBuffers();
 }
 
 

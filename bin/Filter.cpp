@@ -336,11 +336,12 @@ void *CRTSFilter::getBuffer(size_t bufferLen)
     return BUFFER_PTR(buf);
 }
 
-
+#if 0
 void CRTSFilter::releaseBuffers(void)
 {
     filterModule->removeUnusedBuffers();
 }
+#endif
 
 
 // The buffer used here must be from CRTSFilter::getBuffer().
