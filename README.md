@@ -62,6 +62,12 @@ is not serving a downloaded file.
 
 ## Tests
 
+```
+cd interactiveTests
+```
+
+and look at and run test programs in that directory.
+
 
 ### DEMO: FFT monitor, urandom transmitter, receiver to hexdump
 
@@ -90,8 +96,6 @@ cd bin
 
 
 
-
-### BUG: memory leak?
 
 ```
 cd bin

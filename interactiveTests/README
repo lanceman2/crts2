@@ -1,1 +1,9 @@
-A bunch of scripts that run interactive tests
+A bunch of scripts that run interactive tests.
+
+These programs require X11 windows and xterm.
+
+TODO:
+We still need to come up with a method to find the USRPs and their
+available channels and IP addresses.  So these tests need to be edited to
+work in most cases.  Some will not run at all if you do not have enough
+USRPs.
