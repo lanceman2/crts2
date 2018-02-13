@@ -2,7 +2,10 @@
 
 
 # We must have xterm installed.
-which xterm || exit 1
+if ! which xterm ; then
+    echo "xterm not found"
+    exit 1
+fi
 
 
 COUNTFILE=/tmp/$(whoami)_Ycounter_termRun
