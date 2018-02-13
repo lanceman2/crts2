@@ -38,7 +38,7 @@ DEBUG := \#define DEBUG
 SPEW_LEVEL  := \#define SPEW_LEVEL_DEBUG
 
 
-PREFIX := /usr/local/encap/crts
+PREFIX := $(HOME)/installed/crts
 EOF
 
 echo
