@@ -1,6 +1,10 @@
 #!/bin/bash
 
 
+# We must have xterm installed.
+which xterm || exit 1
+
+
 COUNTFILE=/tmp/$(whoami)_Ycounter_termRun
 
 function restartCounter()
@@ -24,10 +28,10 @@ function reset()
 [ ! -e $COUNTFILE ] && restartCounter
 
 
-y_offset=388
+y_offset=356
 
 y=$(cat $COUNTFILE) # in pixels
-geo="--geometry 98x18+19+$y"
+geo="-geometry 195x25+8+$y"
 
 let y=${y}+$y_offset
 
@@ -35,7 +39,7 @@ echo "$y" > $COUNTFILE
 
 title="$*"
 
-term="mate-terminal --hide-menubar $geo"
+term="xterm $geo"
 
 
 HISTFILE=$(mktemp --suffix=_termRun)
@@ -46,7 +50,7 @@ set -x
 #
 # Figuring out how to escape this command string was very painful:
 #
-$term -t "$title" -x bash -c "$* ; HISTFILE=$HISTFILE bash -i ; rm -f $HISTFILE"
+$term -title "$title" -e bash -c "$* ; HISTFILE=$HISTFILE bash -i ; rm -f $HISTFILE" &
 
 #while true ; do sleep 1 ; done
 
