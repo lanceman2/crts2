@@ -480,8 +480,6 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
         }
             
 
-        DASSERT(!thread->filterModule, "");
-
         if(thread->threadWaiting)
             // signal the thread that is waiting now.
             // The flag thread->threadWaiting and the mutex guarantee
