@@ -449,6 +449,8 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
             // thread->filterModule, but if there is one already we wait
             // in this block of code here.
 
+            DASSERT(!thread->threadWaiting, "");
+
             // Flag that we have been in the waiting in the queue.
             //wasNotInTheQueue = false;
 
