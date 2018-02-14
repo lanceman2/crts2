@@ -427,6 +427,9 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
         // priority.  Each thread can only be in the queue once, because
         // this next block of code is where we do the waiting (blocking).
         //
+        // TODO: We need there to be a able to queue up one request per
+        // thread that is connected, without the threads being blocked.
+        //
         // TODO: Are there any directed graph stream topologies that
         // deadlock because of this queuing?
         //
