@@ -14,6 +14,7 @@
 #include <string>
 #include <stack>
 #include <atomic>
+#include <queue>
 
 #include "crts/debug.h"
 #include "crts/crts.hpp"

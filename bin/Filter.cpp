@@ -2,10 +2,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
+#include <pthread.h>
 #include <atomic>
 #include <map>
 #include <list>
 #include <stack>
+#include <queue>
 
 #include "crts/debug.h"
 #include "crts/Filter.hpp" // CRTSFilter user module interface
@@ -412,59 +414,70 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
             return;
         }
 
-
-        
-        // If (thread->filterModule) then we have a request already
-        // and we must wait for the thread to signal us, and then set this
-        // request.  This in effect gives us a "write" queue size of
-        // one, making us block when the queue is "full".  This will allow
-        // two "adjacent" CRTSFilter write threads to run at the same time.
+        //bool wasNotInTheQueue = true;
+        // If (thread->filterModule) then we have a request already and we
+        // must wait for the thread to signal us, and then set this
+        // request.  This in effect gives us a "write" queue size of one
+        // per thread, making us block when the queue is "full".  This
+        // will allow two "adjacent" CRTSFilter write threads to run at
+        // the same time.
         //
-        if(thread->filterModule)
+        // Also we need to force first in to be first served, so if there
+        // is a write queue we need to let threads in the queue have
+        // priority.  Each thread can only be in the queue once, because
+        // this next block of code is where we do the waiting (blocking).
+        //
+        // TODO: Are there any directed graph stream topologies that
+        // deadlock because of this queuing?
+        //
+        // When a thread pops out of this while loop, if there is more
+        // then one thread connecting and writing, there is no guarantee
+        // that thread->filterModule is not set, so as a first stab at
+        // this we try to alternate threads with this local wasNotInTheQueue
+        // flag.
+        //
+        while(thread->filterModule)
+                //|| (thread->writeQueue.size() && wasNotInTheQueue))
         {
             // This is the case where this thread must block because there
-            // is a request for this thread already.
+            // is a write request for this thread already.
+            //
+            // We save one write request for the thread in
+            // thread->filterModule, but if there is one already we wait
+            // in this block of code here.
 
-            pthread_mutex_t mutex = PTHREAD_MUTEX_INITIALIZER;
-            pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+            // Flag that we have been in the waiting in the queue.
+            //wasNotInTheQueue = false;
 
             // This signal wait call is very important.  Without it we
             // could end up having this fast CRTSFilter overrunning its
             // slower adjacent CRTSFilter.
             //
-            // Note: we have two interlocking mutexes.
-
-            MUTEX_LOCK(&mutex);
-
-            // Let the thread thread know about these:
-            thread->queueMutex = &mutex;
-            thread->queueCond = &cond;
-
-            MUTEX_UNLOCK(&thread->mutex);
-
-
+            // We use this stack memory to add to the write queue for
+            // thread.  It's very convenient that the stack memory comes
+            // and goes with the need of the memory.  We pass the pointer
+            // to the other thread that will use it to signal this thread
+            // with.  Very efficient.
+            //
+            pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
+            thread->writeQueue.push(&cond);
+        
             // We release the mutex lock and wait:
-            ASSERT((errno = pthread_cond_wait(&cond, &mutex)) == 0, "");
+            ASSERT((errno = pthread_cond_wait(&cond, &thread->mutex)) == 0, "");
             // Now we have the mutex lock again.
 
+            // The thread that called pthread_cond_signal() will have
+            // pulled this off the queue.
 
-            MUTEX_LOCK(&thread->mutex);
-
-            MUTEX_UNLOCK(&mutex);
-
-            // There may be kernel/system resources associated with
-            // these, so we destroy them.
-            ASSERT((errno = pthread_mutex_destroy(&mutex)) == 0, "");
-            ASSERT((errno = pthread_cond_destroy(&cond)) == 0, "");
-
-            // Mark that there is nothing in the thread queue
-            thread->queueMutex = 0;
-#ifdef DEBUG
-            // The logic does not require that this be reset to zero
-            // but resetting it will help check/catch an assertion.
-            thread->queueCond = 0;
-#endif
+            // Cleanup if there are any kernel resources associated with a
+            // pthread condition thing.  We are guaranteed that no other
+            // thread will access it, by virtue that we have been signaled
+            // and we have the mutex lock now.
+            ASSERT(0 == pthread_cond_destroy(&cond), "");
         }
+            
+
+        DASSERT(!thread->filterModule, "");
 
         if(thread->threadWaiting)
             // signal the thread that is waiting now.
@@ -482,14 +495,6 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
         thread->buffer = buffer;
         thread->len = len;
         thread->channelNum = channelNum;
-
-#if 0
-        // We check to free the buffer that was passed to us
-        // in the thread, not here.
-        if(h && h->useCount.fetch_sub(1) == 1)
-            // header from the buffer passed in.
-            freeBuffer(h);
-#endif
 
         MUTEX_UNLOCK(&thread->mutex);
         // The thread thread will decrement the buffer use count at

@@ -189,11 +189,16 @@ ssize_t Tx::write(void *buffer, size_t len, uint32_t channelNum)
     // thread, because of libuhd.
     if(!device) init();
 
-    // TODO: check for error here:
-    device->send(buffer, len/sizeof(std::complex<float>),
+    // TODO: check for error here, and retry?
+    size_t ret = device->send(buffer, len/sizeof(std::complex<float>),
             metadata,
             uhd::io_type_t::COMPLEX_FLOAT32,
             uhd::device::SEND_MODE_FULL_BUFF);
+
+    if(ret != len/sizeof(std::complex<float>))
+    {
+        WARN("wrote only %zu of complex values", ret, len/sizeof(std::complex<float>));
+    }
 
 
     if(metadata.start_of_burst)

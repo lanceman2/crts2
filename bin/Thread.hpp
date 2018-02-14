@@ -1,4 +1,27 @@
-//
+
+
+// TODO: We may need to make a queue of write requests
+// that uses struct WriteRequest like so:
+#if 0
+struct WriteRequest
+{
+    // The Filter module that will have it's CRTSFilter::write() called
+    // next.  Set to 0 if this is none.
+    FilterModule *filterModule;
+
+    // buffer, len, channelNum are for calling 
+    // CRTSFilter::write(buffer, len, channelNum)
+    //
+    void *buffer;
+
+    // Buffer length
+    size_t len;
+
+    // Current channel to write.
+    uint32_t channelNum;
+};
+#endif
+
 // It groups filters with a running thread.  There is
 // a current filter that the thread is calling CRTSFilter::write()
 // with and may be other filters that will be used.
@@ -13,7 +36,7 @@ class Thread
         // Launch the pthread via pthread_create()
         //
         // We separated starting the thread from the constructor so that
-        // the user and look at the connection and thread topology before
+        // the user can look at the connection and thread topology before
         // starting the threads.  The thread callback function is called
         // and all the threads in all streams will barrier at the top of
         // the thread callback.
@@ -89,14 +112,13 @@ class Thread
         //       We must have the mutex just above to access these:
         /////////////////////////////////////////////////////////////
 
-        // These may be setup by another thread that is feeding data to
-        // this thread via Filtermodule::write(), the memory of these
-        // are in the Filtermodule::write() stack.  We use them to
-        // pop the write queue.
+        // This is set if another thread is blocked by this thread
+        // and is waiting in a Filtermodule::write() call.  The other
+        // thread will set this flag and call pthread_cond_wait()
+        // and the thread of this object will signal it.
         //
-        pthread_mutex_t *queueMutex;
-        pthread_cond_t *queueCond;
-
+        // An ordered queue, first come, first serve.
+        std::queue<pthread_cond_t *> writeQueue;
 
         // We have two cases, blocks of code, when this thread is not
         // holding the mutex lock:
@@ -118,8 +140,7 @@ class Thread
         // more work than checking a flag.  If it adds a mode switch than
         // this flags adds huge resource savings.
         //
-        bool threadWaiting; // thread calling pthread_cond_wait()
-
+        bool threadWaiting; // thread calling pthread_cond_wait(cond, mutex)
 
 
         // All the filter modules that this thread can call
@@ -144,7 +165,9 @@ class Thread
         // Buffer length
         size_t len;
 
-        // Current channel to write.
+        // Current channel to write.  There is one channel per connection.
+        // Channel numbers start at 0 and go to N-1, where N is the number
+        // of channels.
         uint32_t channelNum;
 
     private:

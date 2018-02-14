@@ -16,6 +16,7 @@
 #include <string>
 #include <stack>
 #include <atomic>
+#include <queue>
 
 #include "crts/debug.h"
 
@@ -103,7 +104,8 @@ size_t Stream::wait(void)
     // Here we loose the mutex lock and wait
     // TODO:  Let COND_WAIT() macro wrapper recall the pthread_cond_wait()
     // if a signal interrupts the call.
-    ASSERT((errno = pthread_cond_wait(&cond, &mutex)) == 0, "");
+    errno = pthread_cond_wait(&cond, &mutex);
+    ASSERT(errno == 0, "");
 
     waiting = false;
 

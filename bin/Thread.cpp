@@ -2,10 +2,12 @@
 #include <stdlib.h>
 #include <string.h>
 #include <inttypes.h>
+#include <pthread.h>
 #include <atomic>
 #include <map>
 #include <list>
 #include <stack>
+#include <queue>
 
 #include "crts/debug.h"
 #include "crts/Filter.hpp" // CRTSFilter user module interface
@@ -125,25 +127,24 @@ static void *filterThreadWrite(Thread *thread)
 
         MUTEX_LOCK(mutex);
 
-        if(thread->queueMutex)
+        if(thread->writeQueue.size() && !thread->filterModule)
         {
-            // There is another thread waiting to write.
+            // There is at least one thread waiting to write,
+            // AND
+            // we do not have a write request yet.
             //
-            DASSERT(thread->queueCond, "");
 
-            MUTEX_LOCK(thread->queueMutex);
+            ASSERT((errno = pthread_cond_signal(thread->writeQueue.front())) == 0, "");
+            // This other thread will queue up this next write when
+            // they wake and get this threads mutex.
+            
+            // Pull this request off the queue.
 
-            // We have one in the "queue" from FilterModule::write().
-            // There should be a thread waiting, because of this
-            // "queuing".
-            ASSERT((errno = pthread_cond_signal(
-                            thread->queueCond)) == 0, "");
+            thread->writeQueue.pop();
 
-            MUTEX_UNLOCK(thread->queueMutex);
-
-            // And some time later the thread we just signaled will
-            // setup for the next CRTSFilter::write() call
-            // buffer, len, and channelNum.
+            // The memory for this struct WriteQueue was on the stack in
+            // the other thread that we signaled, we just got a pointer to
+            // it using the thread mutex as protection.  Pretty neat.
         }
 
         if(!isRunning)
