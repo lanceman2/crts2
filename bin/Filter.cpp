@@ -442,14 +442,14 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
         while(thread->filterModule)
                 //|| (thread->writeQueue.size() && wasNotInTheQueue))
         {
+            // CASE: thread blocked.
+
             // This is the case where this thread must block because there
             // is a write request for this thread already.
             //
             // We save one write request for the thread in
             // thread->filterModule, but if there is one already we wait
             // in this block of code here.
-
-            DASSERT(!thread->threadWaiting, "");
 
             // Flag that we have been in the waiting in the queue.
             //wasNotInTheQueue = false;
@@ -482,6 +482,16 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
         }
             
 
+        // TODO: We need to add a queue with an entry for each thread
+        /* that is connected.  With the variables:
+            thread->filterModule = this;
+            thread->buffer = buffer;
+            thread->len = len;
+            thread->channelNum = channelNum;
+          We in effect have a queue with one entry for what ever thread
+          gets here first.
+        */
+
         if(thread->threadWaiting)
             // signal the thread that is waiting now.
             // The flag thread->threadWaiting and the mutex guarantee
@@ -489,7 +499,8 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
             ASSERT((errno = pthread_cond_signal(&thread->cond))
                     == 0, "");
             // The thread will wake up only after we release the threads
-            // mutex lock down below here.
+            // mutex lock down below here then it will act on this
+            // request.
 
         DASSERT(!thread->filterModule, "thread %" PRIu32,
                 thread->threadNum);
