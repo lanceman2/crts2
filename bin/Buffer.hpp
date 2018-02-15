@@ -24,7 +24,7 @@ struct Header
 
     // If there are threads then this
     // mutex lock is held by the thread calling CTRSFilter::write().
-    pthread_mutex_t mutex;
+    //pthread_mutex_t mutex;
 
     // Then useCount drops to zero we recycle this buffer.  useCount is
     // used in a multi-threaded version of reference counting.  Since this
