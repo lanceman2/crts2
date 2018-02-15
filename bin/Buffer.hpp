@@ -122,16 +122,15 @@ static inline void freeBuffer(struct Header *h)
     h->magic = 0;
     memset(h, 0, h->len);
 #endif
-
-    free(h);
-
 #ifdef BUFFER_DEBUG
     MUTEX_LOCK(&bufferDBMutex);
     --bufferDBNum;
-    //NOTICE("freeing buffer(%" PRIu64 ") =%p", bufferDBNum,  h);
+    //WARN("freeing buffer(%" PRIu64 ") =%p", bufferDBNum,  h);
 
     MUTEX_UNLOCK(&bufferDBMutex);
 #endif
+
+    free(h);
 }
 
 

@@ -33,15 +33,15 @@ SleepTest::SleepTest(int argc, const char **argv)
     t.tv_sec = 0;
     t.tv_nsec = 0;
 
-    struct drand48_data buffer;
+    struct drand48_data rbuffer;
     ASSERT((errno = pthread_mutex_lock(&st_mutex)) == 0, "");
     // This is this objects unique seed.
     uint64_t seedVal = ++st_loadCount;
     ASSERT((errno = pthread_mutex_unlock(&st_mutex)) == 0, "");
 
-    memset(&buffer, 0, sizeof(buffer));
-    srand48_r(seedVal, &buffer);
-    lrand48_r(&buffer, &t.tv_nsec);
+    memset(&rbuffer, 0, sizeof(rbuffer));
+    srand48_r(seedVal, &rbuffer);
+    lrand48_r(&rbuffer, &t.tv_nsec);
     // sleep time between 0.001 to 0.003 seconds
     t.tv_nsec = t.tv_nsec % 2000000 + 1000000;
 

@@ -238,6 +238,8 @@ void CRTSFilter::writePush(void *buffer, size_t bufferLen,
     //DASSERT(buffer, "");
     //DASSERT(bufferLen, "");
 
+    DASSERT(!buffer || BUFFER_HEADER(buffer)->magic == MAGIC, "");
+
     // channelNum must be a reader channel in this filter
     DASSERT(filterModule->numReaders > channelNum ||
             channelNum == ALL_CHANNELS,
@@ -316,6 +318,8 @@ void *CRTSFilter::getBuffer(size_t bufferLen)
     MUTEX_LOCK(&bufferDBMutex);
     ++bufferDBNum;
 
+    //WARN("added buffer head at %p ptr=%p", buf, BUFFER_PTR(buf));
+
     if(bufferDBNum > bufferDBMax)
     {
         // Note: This only prints if the maximum number of buffers
@@ -356,7 +360,6 @@ void CRTSFilter::releaseBuffers(void)
 void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
         bool toDifferentThread)
 {
-
     struct Header *h = 0;
 
     if(buffer)
@@ -376,7 +379,10 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
     if(toDifferentThread)
     {
         if(h)
-            // We need to increment the buffer useCount for the thread here
+            // We need to increment the buffer useCount for the other
+            // thread here now.  The (other) thread will decrement this
+            // counter after it calls CRTSFilter::write() with this
+            // buffer.
             ++h->useCount;
 
         // NOTE: thread is the pthread we are writing to from the current
@@ -443,14 +449,15 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
 
                 //|| (thread->writeQueue.size() && wasNotInTheQueue))
         {
-            // CASE: thread blocked.
+            // CASE: current thread blocks waiting for FilterModule::thread
+            // in filterThreadWrite().
 
             // This is the case where this thread must block because there
             // is a write request for the thread (thread) already.
             //
             // TODO: Add one non-blocking queued request per connected
             // thread.  That's what we have now if there was just one
-            // connected thread.
+            // connected thread writing to FilterModule::thread.
             //
             // We save one write request for the thread in
             // thread->filterModule, but if there is one already we wait
@@ -476,8 +483,15 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
             { 
                 PTHREAD_COND_INITIALIZER,
                 0, 0, /*next, prev*/
+
+                // The request:
                 this, buffer, len, channelNum
             };
+
+            // Is the data struct initialized correctly?
+            // Ya stupid check, but I'll looking for a bug.
+            DASSERT(buffer == entry.buffer, "");
+            DASSERT(!buffer || BUFFER_HEADER(buffer)->magic == MAGIC, "");
 
             // Yes we use stack memory for the entry that we queue up.
             WriteQueue_push(thread->writeQueue, &entry);
@@ -520,6 +534,7 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
             // mutex lock down below here then it will act on this
             // request.
 
+        DASSERT(!buffer || BUFFER_HEADER(buffer)->magic == MAGIC, "");
         DASSERT(!thread->filterModule, "thread %" PRIu32,
                 thread->threadNum);
 
@@ -531,7 +546,6 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
         MUTEX_UNLOCK(&thread->mutex);
         // The thread thread will decrement the buffer use count at
         // the end of it's cycle.
-
     }
     else
     {
@@ -557,7 +571,6 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
         if(h && h->useCount.fetch_sub(1) == 1)
             // header from the buffer passed in.
             freeBuffer(h);
-
     }
 }
 

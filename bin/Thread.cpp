@@ -103,16 +103,17 @@ static void *filterThreadWrite(Thread *thread)
             buffer = thread->buffer;
             len = thread->len;
             channelNum = thread->channelNum;
-
-            // If another thread wants to know, they can look at this
-            // pointer to see this thread is doing its next writes, and we
-            // mark that we are ready to queue up the next request if we
-            // continue to loop.
-            thread->filterModule = 0;
         }
 
+        // If another thread wants to know, they can look at this pointer
+        // to see this thread is doing its next writes, and we mark that
+        // we are ready to get the next request if we continue to loop.
+        thread->filterModule = 0;
+
+        DASSERT(!buffer || BUFFER_HEADER(buffer)->magic == MAGIC, "");
 
         MUTEX_UNLOCK(mutex);
+
 
         // While this thread it carrying out its' orders new orders
         // may be set, queued up, by another thread.
@@ -170,10 +171,10 @@ static void *filterThreadWrite(Thread *thread)
 
         if(buffer)
         {
-            // Remove any buffers that the above
-            // filterModule->filter->write() did not create and this
-            // threads above filterModule->filter->write() just happens to
-            // be the last user of.
+            // Remove buffer that the above filterModule->filter->write()
+            // did not create and this threads above
+            // filterModule->filter->write() may just happen to be the
+            // last user of this buffer.
             struct Header *h = BUFFER_HEADER(buffer);
 
             if(h->useCount.fetch_sub(1) == 1)
@@ -199,6 +200,7 @@ static void *filterThreadWrite(Thread *thread)
             // Setup the next write request.
             filterModule = thread->filterModule;
             buffer = thread->buffer;
+            DASSERT(!buffer || BUFFER_HEADER(buffer)->magic == MAGIC, "");
             len = thread->len;
             channelNum = thread->channelNum;
         }
@@ -224,6 +226,7 @@ static void *filterThreadWrite(Thread *thread)
             // (including this one) know that via thread->filterModule.
             thread->filterModule = filterModule = writeQueue->filterModule;
             buffer = writeQueue->buffer;
+            DASSERT(!buffer || BUFFER_HEADER(buffer)->magic == MAGIC, "");
             len = writeQueue->len;
             channelNum = writeQueue->channelNum;
         }
@@ -347,7 +350,15 @@ Thread::~Thread()
     if(totalNumThreads == 0)
     {
         MUTEX_LOCK(&bufferDBMutex);
-        DSPEW("total remaining buffers = %" PRIu64, bufferDBNum);
+        // It's real nice to know that we do not have a memory leak
+        // with these auto cleaning buffers.
+        if(bufferDBNum == 0)
+            DSPEW("total remaining buffers = %" PRIu64 " very nice!!",
+                    bufferDBNum);
+        else
+            DSPEW("total remaining buffers = %" PRIu64 " crap!!",
+                    bufferDBNum);
+
         DASSERT(bufferDBNum == 0,
                 "There are %" PRIu64 " unfreed buffers",
                 bufferDBNum);
