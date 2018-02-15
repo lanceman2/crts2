@@ -22,6 +22,105 @@ struct WriteRequest
 };
 #endif
 
+
+// A queue of condition variables.
+//
+// You might ask why are we writing our on queue and not using
+// std:queue<>.  The simple answer is that this is much much much faster.
+// Adding an entry to std::queue requires memory allocation from the heap,
+// we get our memory from the function call stack where we push the entry
+// on the queue, in Filter::write().  A call to the heap allocator has to
+// do a lot of work compared to pretty much none at all here, the stack
+// has to be there anyway.  Like comparing doing nothing at all to doing
+// something.  Doing nothing always wins, it's always faster to do nothing
+// than something.  Doing this is nothing compared to a heap allocation
+// (like malloc()), which would be adding a call stack and searching a
+// tree or other data structure.  This does not even add a call on the
+// stack, given these (WriteQueue_push() and WriteQueue_pop()) are inline
+// functions.
+//
+struct WriteQueue
+{
+    pthread_cond_t cond;
+    struct WriteQueue *next, *prev;
+    // The request that is queued.
+    FilterModule *filterModule;
+    void *buffer;
+    size_t len;
+    uint32_t channelNum;
+};
+
+static inline void WriteQueue_push(struct WriteQueue* &queue, struct WriteQueue *request)
+{
+    DASSERT(!request->next, "");
+    DASSERT(!request->prev, "");
+
+    if(queue && queue->next)
+    {
+        // CASE 2: There is 2 or more in the queue
+        DASSERT(queue->prev, "");
+        DASSERT(queue->prev != queue, "");
+        DASSERT(queue->next != queue, "");
+
+        request->next = queue;
+        request->prev = queue->prev;
+
+        queue->prev->next = request;
+        queue->prev = request;
+    }
+    else if(queue)
+    {
+        // CASE 1: There is 1 in the queue.
+        DASSERT(!queue->prev, "");
+
+        request->next = queue;
+        request->prev = queue;
+        queue->next = request;
+        queue->prev = request;
+    }
+    else
+    {
+        // CASE 0: There are 0 in the queue
+        queue = request;
+    }
+}
+
+// Returns a pointer to the WriteQueue that is next in the queue
+// or 0 if there is none
+static inline struct WriteQueue *WriteQueue_pop(struct WriteQueue* &queue)
+{
+    if(!queue) return 0; // CASE 0: There are 0 in the queue.
+
+    struct WriteQueue *ret = queue; // this is returned.
+
+    if(queue->next && queue->next != queue->prev)
+    {
+        // CASE 3: There are 3 or more in the queue.
+        // Connect the two adjacent entries.
+        queue->prev->next = queue->next;
+        queue->next->prev = queue->prev;
+        // move to the next in the queue.
+        queue = queue->next;
+        // Now we have 1 less in the queue
+    }
+    else if(queue->next)
+    {
+        // CASE 2: There are just 2 in the queue.
+        queue = queue->next;
+        queue->next = 0;
+        queue->prev = 0;
+        // Now there is 1 in the queue.
+    }
+    else
+    {
+        // CASE 1: There is just 1 in the queue.
+        queue = 0; // We can set a reference.
+        // Now there are 0 in the queue.
+    }
+    return ret;
+}
+
+
 // It groups filters with a running thread.  There is
 // a current filter that the thread is calling CRTSFilter::write()
 // with and may be other filters that will be used.
@@ -118,7 +217,8 @@ class Thread
         // and the thread of this object will signal it.
         //
         // An ordered queue, first come, first serve.
-        std::queue<pthread_cond_t *> writeQueue;
+        //std::queue<pthread_cond_t *> writeQueue;
+        struct WriteQueue *writeQueue;
 
         // We have two cases, blocks of code, when this thread is not
         // holding the mutex lock:

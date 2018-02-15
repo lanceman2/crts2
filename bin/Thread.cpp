@@ -41,7 +41,7 @@ static void *filterThreadWrite(Thread *thread)
 
 
     // These variables will change at every loop:
-    FilterModule *filterModule;
+    FilterModule *filterModule = thread->filterModule;
     void *buffer;
     size_t len;
     uint32_t channelNum;
@@ -71,48 +71,45 @@ static void *filterThreadWrite(Thread *thread)
 
 
 
-    while(true)
+    while(true) // This loop is the guts of the whole thing.
     {
-        if(!thread->filterModule)
+        if(!filterModule)
         {
             thread->threadWaiting = true;
             // WAITING FOR SIGNAL HERE
             ASSERT((errno = pthread_cond_wait(cond, mutex)) == 0, "");
             // Now we have the mutex lock again.
             thread->threadWaiting = false;
+
+            if(!thread->filterModule)
+                // There is no request so this is just a signal to return;
+                // this threads work is done.
+                break;
+
+            // The filter module and what is written may change in each loop.
+            DASSERT(thread->filterModule->filter, "");
+            filterModule = thread->filterModule;
+
+            // We are a source (no writers) or we where passed a buffer
+            DASSERT((filterModule->writers && thread->buffer) ||
+                    !filterModule->writers, "");
+            // Check that the buffer is one of ours via MAGIC.
+            DASSERT(!filterModule->writers || (thread->buffer &&
+                    BUFFER_HEADER(thread->buffer)->magic == MAGIC), "");
+
+            // Receive the orders for this thread.  We need to set local
+            // stack variables with the values for this write() request.
+            filterModule = thread->filterModule;
+            buffer = thread->buffer;
+            len = thread->len;
+            channelNum = thread->channelNum;
+
+            // If another thread wants to know, they can look at this
+            // pointer to see this thread is doing its next writes, and we
+            // mark that we are ready to queue up the next request if we
+            // continue to loop.
+            thread->filterModule = 0;
         }
-        // else
-        //    had a filterModule already set before we first got the lock
-        //    so we will skip waiting for the signal.
-        //
-        // Now we have the mutex lock.
-
-        if(!thread->filterModule)
-            // There is no request so this is just a signal to return;
-            // this threads work is done.
-            break;
-
-        // The filter module and what is written may change in each loop.
-        DASSERT(thread->filterModule->filter, "");
-        filterModule = thread->filterModule;
-
-        // We are a source (no writers) or we where passed a buffer
-        DASSERT((filterModule->writers && thread->buffer) ||
-                !filterModule->writers, "");
-        // Check that the buffer is one of ours.
-        DASSERT(!filterModule->writers || (thread->buffer &&
-                BUFFER_HEADER(thread->buffer)->magic == MAGIC), "");
-
-        // Receive the orders for this thread.  We need to set local
-        // stack variables with the values for this write() request.
-        buffer = thread->buffer;
-        len = thread->len;
-        channelNum = thread->channelNum;
-
-        // If another thread wants to know, they can look at this pointer to
-        // see this thread is doing its next writes, and we mark that we
-        // are ready to queue up the next request if we continue to loop.
-        thread->filterModule = 0;
 
 
         MUTEX_UNLOCK(mutex);
@@ -127,53 +124,44 @@ static void *filterThreadWrite(Thread *thread)
 
         MUTEX_LOCK(mutex);
 
-        if(thread->writeQueue.size() && !thread->filterModule)
-        {
-            // There is at least one thread waiting to write,
-            // AND
-            // we do not have a write request yet.
-            //
-
-            ASSERT((errno = pthread_cond_signal(thread->writeQueue.front())) == 0, "");
-            // This other thread will queue up this next write when
-            // they wake and get this threads mutex.
-            
-            // Pull this request off the queue.
-
-            thread->writeQueue.pop();
-
-            // The memory for this struct WriteQueue was on the stack in
-            // the other thread that we signaled, we just got a pointer to
-            // it using the thread mutex as protection.  Pretty neat.
-        }
+        // Hi, we're back from a users CRTSFilter::write() call
+        // and now we have the mutex lock again.
 
         if(!isRunning)
         {
-            // A call call to filterModule->filter->write() in this
-            // or other thread unset isRunning for this stream.
+            // A call to filterModule->filter->write() in this or another
+            // thread unset isRunning flag for this stream.
 
-            // We can be a little slow here, because we are now in
-            // a shutdown state.
+            // We can be a little slow here, because we are now in a
+            // shutdown transient state.
             //
-            // The stream is going to be deleted soon.  When it is
-            // we will wake up from pthread_cond_wait() above and see
-            // that thread->filterModule is not set.
+            // The stream is going to be deleted soon.  When it is we will
+            // wake up from pthread_cond_wait() above and see that
+            // thread->filterModule is not set.
             //
-            // The main thread is now waiting for all the thread in
-            // the stream to be not busy.
+            // The main thread is now waiting for all the threads in the
+            // stream to be not busy.
             //
-            // Since the thread run asynchronously there could be
+            // Since the threads run asynchronously there could be
             // unwritten data headed to this thread now, just at a
             // different thread now.
             //
-    
+            // Since we don't know what thread set the Stream::isRunning
+            // to false all the threads must try to wake the main thread,
+            // otherwise the main thread could wait forever.
+            //
+            // This is just in this shutdown transit state, the
+            // Stream::isRunning flag is usually set to true so this slow
+            // MUTEX_LOCK() pthread_cond_signal() MUTEX_UNLOCK() step is
+            // usually skipped.
+            //
+
             MUTEX_LOCK(&Stream::mutex);
             if(Stream::waiting)
                 // The main thread is calling pthread_cond_wait().
                 ASSERT((errno = pthread_cond_signal(&Stream::cond)) == 0, "");
             MUTEX_UNLOCK(&Stream::mutex);
         }
-
 
         // Remove/free any buffers that the filterModule->filter->write()
         // created that have not been passed to another write() call, or
@@ -191,10 +179,65 @@ static void *filterThreadWrite(Thread *thread)
             if(h->useCount.fetch_sub(1) == 1)
                 freeBuffer(h);
         }
+
+
+        // TODO: Add one non-blocking queued request per connected thread.
+        // That's what we have now if there is just one connected thread.
+        // If we start connecting many threads to a single filter we
+        // need to add one non-blocking queue per connected thread.
+
+        struct WriteQueue *writeQueue;
+
+        if(thread->filterModule)
+        {
+            // CASE 1: We have the next write request.
+            //
+            // No threads are waiting for a signal because of this request
+            // was just dumped in this thread object like so, and the
+            // thread that dumped it went right on running.
+            //
+            // Setup the next write request.
+            filterModule = thread->filterModule;
+            buffer = thread->buffer;
+            len = thread->len;
+            channelNum = thread->channelNum;
+        }
+        else if((writeQueue = WriteQueue_pop(thread->writeQueue)))
+        {
+            // CASE 2: Request in the queue from threads that are waiting,
+            // and there is not a request in thread->filterModule.
+            //
+            // Another thread beat this request in CASE 1.  Now some poor
+            // thread is waiting in a pthread_cond_wait() call.
+            //
+
+            ASSERT((errno = pthread_cond_signal(&writeQueue->cond)) == 0, "");
+            // The other thread that we just signaled will be blocking
+            // until we release the thread->mutex lock.
+
+            // The memory for this struct WriteQueue was on the stack in
+            // the other thread that we signaled, we just got a pointer to
+            // it using the thread mutex as protection.  Pretty neat.
+
+            // Setup the next write request we need and let the requesting
+            // thread know that, and we also need any other threads
+            // (including this one) know that via thread->filterModule.
+            thread->filterModule = filterModule = writeQueue->filterModule;
+            buffer = writeQueue->buffer;
+            len = writeQueue->len;
+            channelNum = writeQueue->channelNum;
+        }
+        else
+        {
+            // CASE 3: We have no requests yet from anywhere and we will
+            // wait above.
+            //
+            filterModule = 0;
+        }
     }
 
-    // Let the other threads know that we are done running this thread.
-    // If other code sees this as not set than this thread is still
+    // Let the main thread know that we are done running this thread.  If
+    // another thread sees this as not set than this thread is still
     // running.
     thread->hasReturned = true;
 
@@ -203,6 +246,7 @@ static void *filterThreadWrite(Thread *thread)
     // Now signal the master/main thread.
     MUTEX_LOCK(&Stream::mutex);
     DASSERT(isRunning == false, "");
+
     if(Stream::waiting)
         // The main thread is calling pthread_cond_wait().
         ASSERT((errno = pthread_cond_signal(&Stream::cond)) == 0, "");
@@ -242,6 +286,7 @@ Thread::Thread(Stream *stream_in):
     threadNum(++createCount),
     barrier(0),
     stream(*stream_in),
+    writeQueue(0),
     hasReturned(false),
     filterModule(0)
 {

@@ -439,13 +439,18 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
         // this we try to alternate threads with this local wasNotInTheQueue
         // flag.
         //
-        while(thread->filterModule)
+        if(thread->filterModule) // thread->filterModule is the next request
+
                 //|| (thread->writeQueue.size() && wasNotInTheQueue))
         {
             // CASE: thread blocked.
 
             // This is the case where this thread must block because there
-            // is a write request for this thread already.
+            // is a write request for the thread (thread) already.
+            //
+            // TODO: Add one non-blocking queued request per connected
+            // thread.  That's what we have now if there was just one
+            // connected thread.
             //
             // We save one write request for the thread in
             // thread->filterModule, but if there is one already we wait
@@ -462,13 +467,23 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
             // thread.  It's very convenient that the stack memory comes
             // and goes with the need of the memory.  We pass the pointer
             // to the other thread that will use it to signal this thread
-            // with.  Very efficient.
+            // with.
             //
-            pthread_cond_t cond = PTHREAD_COND_INITIALIZER;
-            thread->writeQueue.push(&cond);
-        
-            // We release the mutex lock and wait:
-            ASSERT((errno = pthread_cond_wait(&cond, &thread->mutex)) == 0, "");
+            // Much faster than using the heap allocator as with
+            // a std::queue<pthread_cond_t *> writeQueue 
+            //
+            struct WriteQueue entry =
+            { 
+                PTHREAD_COND_INITIALIZER,
+                0, 0, /*next, prev*/
+                this, buffer, len, channelNum
+            };
+
+            // Yes we use stack memory for the entry that we queue up.
+            WriteQueue_push(thread->writeQueue, &entry);
+
+            // We release the mutex lock and wait for signal:
+            ASSERT((errno = pthread_cond_wait(&entry.cond, &thread->mutex)) == 0, "");
             // Now we have the mutex lock again.
 
             // The thread that called pthread_cond_signal() will have
@@ -478,7 +493,10 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
             // pthread condition thing.  We are guaranteed that no other
             // thread will access it, by virtue that we have been signaled
             // and we have the mutex lock now.
-            ASSERT(0 == pthread_cond_destroy(&cond), "");
+            ASSERT(0 == pthread_cond_destroy(&entry.cond), "");
+
+            MUTEX_UNLOCK(&thread->mutex);
+            return;
         }
             
 
