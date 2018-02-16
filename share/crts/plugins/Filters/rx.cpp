@@ -213,6 +213,8 @@ void Rx::init(void)
 
     DSPEW("usrp->get_pp_string()=\n%s",
             usrp->get_pp_string().c_str());
+    DSPEW("usrp->get_rx_num_channels()=%d",
+            usrp->get_rx_num_channels());
 
     //setup streaming. Whatever that means.
     uhd::stream_cmd_t stream_cmd(uhd::stream_cmd_t::STREAM_MODE_START_CONTINUOUS);
