@@ -420,22 +420,6 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
             return;
         }
 
-        //bool wasNotInTheQueue = true;
-        // If (thread->filterModule) then we have a request already and we
-        // must wait for the thread to signal us, and then set this
-        // request.  This in effect gives us a "write" queue size of one
-        // per thread, making us block when the queue is "full".  This
-        // will allow two "adjacent" CRTSFilter write threads to run at
-        // the same time.
-        //
-        // Also we need to force first in to be first served, so if there
-        // is a write queue we need to let threads in the queue have
-        // priority.  Each thread can only be in the queue once, because
-        // this next block of code is where we do the waiting (blocking).
-        //
-        // TODO: We need there to be a able to queue up one request per
-        // thread that is connected, without the threads being blocked.
-        //
         // TODO: Are there any directed graph stream topologies that
         // deadlock because of this queuing?
         //
@@ -447,8 +431,6 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
         //
         if(thread->filterModule || thread->writeQueue)
                 // thread->filterModule is the next request
-
-                //|| (thread->writeQueue.size() && wasNotInTheQueue))
         {
             // CASE: current thread blocks waiting for FilterModule::thread
             // in filterThreadWrite().
