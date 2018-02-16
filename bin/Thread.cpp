@@ -353,10 +353,10 @@ Thread::~Thread()
         // It's real nice to know that we do not have a memory leak
         // with these auto cleaning buffers.
         if(bufferDBNum == 0)
-            DSPEW("total remaining buffers = %" PRIu64 " very nice!!",
+            INFO("total remaining buffers = %" PRIu64 " very nice!!",
                     bufferDBNum);
         else
-            DSPEW("total remaining buffers = %" PRIu64 " crap!!",
+            WARN("total remaining buffers = %" PRIu64 " crap!!",
                     bufferDBNum);
 
         DASSERT(bufferDBNum == 0,
