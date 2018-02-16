@@ -445,7 +445,8 @@ void FilterModule::write(void *buffer, size_t len, uint32_t channelNum,
         // this we try to alternate threads with this local wasNotInTheQueue
         // flag.
         //
-        if(thread->filterModule) // thread->filterModule is the next request
+        if(thread->filterModule || thread->writeQueue)
+                // thread->filterModule is the next request
 
                 //|| (thread->writeQueue.size() && wasNotInTheQueue))
         {
