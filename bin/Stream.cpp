@@ -264,6 +264,7 @@ Stream::~Stream(void)
         }
     }
 
+    // BUG: We never get to here.
     DSPEW();
     
     // NOW: All Threads in this stream should be in pthread_cond_wait() in
